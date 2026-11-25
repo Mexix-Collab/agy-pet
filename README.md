@@ -1,28 +1,28 @@
 <div align="center">
 
-<img src="assets/clawd-banner.svg" alt="AGY Claude Style — Clawd Mascot Banner" width="880" />
+<img src="assets/clawd-banner.svg" alt="AGY Pet — Desktop Pet & Studio UI Banner" width="880" />
 
-# 🦀✨ AGY Claude Style (`agy-claude-style`)
+# 🐾✨ AGY Pet (`agy-pet`)
 
-**让会眨眼、会摸鱼、还能被挠痒痒的像素小螃蟹 `Clawd` 陪你在 Google Antigravity 里写代码** `(๑•̀ㅂ•́)و✧`
+**让会看你写代码、会播报任务进度、还会互动撒娇的透明桌面宠物 & 趴框伴侣陪你在 Google Antigravity 里写代码** `(๑•̀ㅂ•́)و✧`
 
-为 **Google Antigravity**（Windows / macOS / Linux）打造的一体化界面重塑、多语言本地化与 Token HUD 遥测增强插件。<br/>
+为 **Google Antigravity**（Windows / macOS / Linux）打造的一体化透明桌面宠物、输入框趴框伴侣、Studio 界面重塑、5 语言本地化、Token HUD 遥测与 `agy-fast` 加速集成套件。<br/>
 基于 Antigravity 内置 **Chrome DevTools Protocol（CDP）** 调试端口实现无损动态注入——**不改动任何原版安装文件**，支持热更新与一键无痕退潮还原 🌊
 
 <p>
-  <a href="#clawd-饲养指南"><img src="https://img.shields.io/badge/Clawd_Mascot-19_Animations-D97757?style=flat-square" alt="Clawd Mascot: 19 Animations" /></a>
+  <a href="#核心特性"><img src="https://img.shields.io/badge/Desktop_Pet-114_WebM_Animations-A78BFA?style=flat-square" alt="Desktop Pet: 114 WebM Animations" /></a>
+  <a href="#核心特性"><img src="https://img.shields.io/badge/Dock_Pet-20_Animations_+_Clawd-F472B6?style=flat-square" alt="Dock Pet: 20 Animations + Clawd" /></a>
   <a href="#快速开始"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4D6BFE?style=flat-square" alt="Platform: Windows | macOS | Linux" /></a>
   <a href="#核心特性"><img src="https://img.shields.io/badge/i18n-5_Languages-E2A45F?style=flat-square" alt="i18n: 5 Languages" /></a>
-  <a href="#环境要求"><img src="https://img.shields.io/badge/Zero--Mod-CDP_Live_Inject-63C59A?style=flat-square" alt="Zero-Mod: CDP Live Inject" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-8FA4FF?style=flat-square" alt="License: MIT" /></a>
 </p>
 
-[✨ 核心特性](#核心特性) · [🦀 Clawd 饲养指南](#clawd-饲养指南) · [🔄 运行模式](#运行模式对比) · [🚀 马上领养](#快速开始) · [⚙️ 配置调教](#配置说明) · [🗂️ 项目结构](#项目结构) · [💌 来源声明](#来源声明)
+[✨ 核心特性](#核心特性) · [🦀 伴侣互动指南](#clawd-饲养指南) · [🔄 运行模式](#运行模式对比) · [🚀 马上领养](#快速开始) · [⚙️ 配置调教](#配置说明) · [🗂️ 项目结构](#项目结构) · [💌 来源声明](#来源声明)
 
 </div>
 
 > [!NOTE]
-> **来源声明**：本项目灵感及部分源码来源于 [Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)；Codex 思考强度滑杆样式来源于 [Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)；梁武峰思考强度滑杆样式来源于 [mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)。详见 [来源声明](#来源声明)。
+> **来源与二次开发声明**：本项目基于 [0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style)（MIT License）二次开发；Studio UI 灵感及部分源码来源于 [Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)；Codex / 梁武峰思考强度滑杆分别参考 [Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider) 与 [mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)；独立桌面宠物交互设计与物理玩法参考 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)；内置集成的 `agy-fast` 加速插件来源于 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（MIT License）。完整说明与第三方组件清单详见 [来源声明与第三方致谢](#来源声明)。
 
 ---
 
@@ -74,13 +74,23 @@
   - **模型配额**：实时查看各模型配额池剩余百分比与 5h / 周重置倒计时 ⏳。
 - **可选环绕式 HUD**：提供 `hudTopBar`、`hudBottomBar`、`hudRimProgress`、`hudFooterChip`、`hudCompact` 五项可折叠增强开关，默认关闭，按需启用；其中开启 `hudBottomBar` 后，**即使 `ringMode` 处于 `context` 模式也会同步拉取并展示当前模型配额余量**。
 
-### 🦀 5. 像素螃蟹小跟班 `Clawd` (`mascot`)
-- 在输入框右上角蹲着一只超有戏的像素小螃蟹 `Clawd`（内置 **19 套双层精灵图动画**），会跟着对话节奏在 `idle`、`thinking`、`typing`、`error`、`sleeping`、`waking` 等状态间切换，无聊了还会自己抱着小本本摸鱼或对你招手 👋。
-- **礼貌满分**：当输入框上方出现排队消息、`/` 命令菜单或问答确认卡片时，Clawd 会自觉调整留白或悄悄躲起来，绝不遮挡发送、编辑、删除等按钮。
+### 🦀 5. 输入框小跟班（像素螃蟹 `Clawd` + 20 套趴框/坐姿猫娘动画）(`mascot`)
+- 支持经典双层像素小螃蟹 `Clawd`（内置 **19 套双层精灵图动画**）以及 **20 套输入框上沿趴框/坐姿猫娘透明 WebM 动画**（10 套趴框 + 10 套坐姿），随对话状态在待机、盯打字、思考、写代码、后台守候、庆祝、害羞、犯困打盹间自动联动。
+- 支持双击快速查看 5h/周配额余量气泡，以及上下文高占用时自动弹出可一键触发 `/compact` 的轻量提醒卡片；当输入框上方出现排队消息、`/` 命令菜单或问答确认卡片时自动避让，绝不遮挡按钮。
 
-### 🌐 6. 5 语言全局切换 & 设置面板原生集成
+### 🐾 6. Windows 独立透明桌面宠物（WebView2 + DirectComposition 硬件合成）
+- **114 段高清透明 WebM 动画**：支持工作状态联动（思考/编码/归档/等待/庆祝/报错）、自动随机小剧场与漫游、时段彩蛋与睡眠循环，并支持右键打开 `anims/webm/` 目录放入自定义 `.webm` 扩展动作。
+- **实时任务进度胶囊栈**：自动聚合当前 Antigravity 多会话、子代理与 Swarm 蜂群进度，支持一键展开详情或在「完整进度框 / 紧凑数字圆圈」间切换。
+- **个性化称呼与丰富交互**：
+  - 右键「👑 称呼设置」可随时切换宠物对你的称呼（默认 **「老大」**，内置 `老大 / 主人 / 老板 / 大人 / 老师 / 大佬 / 伙伴 / 朋友` 预设，并支持自定义称呼），碎碎念、问候与待办提醒实时同步生效。
+  - 支持自由拖拽弹簧跟手、双击弹弓蓄力发射与空中抓取积分小游戏、实时天气气泡、头顶轻量待办清单（含到期前 15 分钟提醒）、Q 弹点击音效与悬停快捷键（`S` 睡觉、`D` 待办、`W` 天气、`C` 聊一句）。
+
+### ⚡ 7. 可选集成 `agy-fast` 加速插件
+- Windows 安装器与桌面宠物右键均提供 `agy-fast`（[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)）一键部署与启停开关（需本机 Node.js >= 20），通过批量检索、多块原子编辑、符号大纲切片读取与并发校验显著降低工具调用轮次与额度消耗。
+
+### 🌐 8. 5 语言全局切换 & 设置面板原生集成
 - **5 语言全局本地化 (`language`)**：支持 **简体中文 (`zh-CN`) / 繁體中文 (`zh-TW`) / 粵語 (`yue`) / English (`en`) / 日本語 (`ja`)** 实时切换，作用于整个 Antigravity 主界面、Plan / Orchestrator 编排模式、插件面板以及 **Swarm 蜂群侧栏 (`plugin://swarm--` OOPIF)**；自动跳过代码编辑器、终端、对话/帖子正文与 `data-ag-no-i18n` 保护区，移除插件时无损还原。
-- **原生设置集成**：在 Antigravity `设置 → 外观` 底部自动注入 3 组共 20 项可视化开关，修改通过 CDP `Runtime.addBinding` 以轻量热更新即时生效，并经字段校验后原子写入 `config.json` 持久化。
+- **原生设置集成**：在 Antigravity `设置 → 外观` 底部自动注入可视化开关，修改通过 CDP `Runtime.addBinding` 以轻量热更新即时生效，并经字段校验后原子写入 `config.json` 持久化。
 
 ---
 
@@ -125,8 +135,8 @@ Clawd 是由 [crab-assets.js](crab-assets.js) 与 [mascot-core.js](mascot-core.j
 
 > [!IMPORTANT]
 > **Antigravity 2.33.0+ 启动说明**：从 `2.33.0` 起，Antigravity 不再默认生成 `DevToolsActivePort`，需附加 `--remote-debugging-port=0` 启动参数：
-> - **macOS**：推荐使用安装器生成的 `Antigravity (AGY Claude Style).app`、`launch-antigravity.command`，或在脚本模式运行 `npm run managed` / `./launch.sh --relaunch`（自动附加 `--remote-debugging-port=0` 启动或温和重启，并拉起随宿主退出 watcher）。也可手动 `open -a Antigravity --args --remote-debugging-port=0`。
-> - **Windows**：推荐使用安装器创建的桌面 / 开始菜单「`Antigravity (AGY Claude Style)`」快捷方式（`Antigravity (AGY Claude Style).lnk`），或在脚本模式运行 `npm run managed` / `launch.bat --relaunch`（自动附加 `--remote-debugging-port=0` 启动或温和重启，并拉起随宿主退出 watcher）。
+> - **macOS**：推荐使用安装器生成的 `Antigravity (AGY Pet).app`、`launch-antigravity.command`，或在脚本模式运行 `npm run managed` / `./launch.sh --relaunch`（自动附加 `--remote-debugging-port=0` 启动或温和重启，并拉起随宿主退出 watcher）。也可手动 `open -a Antigravity --args --remote-debugging-port=0`。
+> - **Windows**：推荐使用安装器创建的桌面 / 开始菜单「`Antigravity (AGY Pet)`」快捷方式（`Antigravity (AGY Pet).lnk`），或在脚本模式运行 `npm run managed` / `launch.bat --relaunch`（自动附加 `--remote-debugging-port=0` 启动或温和重启，并拉起随宿主退出 watcher）。
 > - **默认自动接管**：默认启用 `"autoRelaunchWithCdp": true`，在**托管一键启动**（原生快捷方式 / `.app` / `.command` / `npm run managed`）与**常驻守护**模式下，检测到 Antigravity 已运行但未开启 CDP（且未携带 `--remote-debugging-port` 启动参数）时都会自动温和重启一次并附加调试参数；如需关闭可在 `config.json` 中设为 `false`。
 - **Node.js >= 22**（仅脚本模式、测试与从源码构建安装器需要）：项目零第三方 npm 依赖，直接使用 Node.js 内置的 `fetch`、`WebSocket` 与 `node:test`。
 - **.NET Framework 4.x (`csc.exe`)**（仅在 Windows 上从源码构建独立安装包时需要，Windows 10/11 系统默认自带）。
@@ -138,18 +148,18 @@ Clawd 是由 [crab-assets.js](crab-assets.js) 与 [mascot-core.js](mascot-core.j
 ## 🚀 快速开始
 
 > [!TIP]
-> **开箱即用**：不想自己编译？可直接前往仓库 [Releases](https://github.com/0DNANCY/agy-claude-style/releases) 下载 GitHub Actions 自动编译发布的 `AGY-Claude-Style-v<version>-Windows-x64.exe`（Windows）或 `AGY-Claude-Style-v<version>-macOS-universal.dmg`（macOS Universal，支持 Apple Silicon 与 Intel），目标机器无需安装 Node.js！
+> **开箱即用（推荐）**：本 Git 代码仓库保持轻量**仅存放源码（不含 114 段大体积桌面宠物 `.webm` 动画文件）**。请直接前往 [Releases](https://github.com/Mexix-Collab/agy-pet/releases) 下载内置全套动画的完整独立安装包 `AGY-Pet-v<version>-Windows-x64.exe`，目标机器无需安装 Node.js！
 
 <a id="运行模式对比"></a>
 ### 🔄 运行模式对比：托管启动（推荐默认） vs 常驻守护
 
-AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式」**，平时无需任何后台进程驻留；如果你习惯直接点击系统原版 Antigravity 图标启动，也可以一键切换为「常驻守护模式」：
+AGY Pet 提供两种运行模式。**默认推荐「托管启动模式」**，平时无需任何后台进程驻留；如果你习惯直接点击系统原版 Antigravity 图标启动，也可以一键切换为「常驻守护模式」：
 
-| 对比维度 | 🦀 托管启动模式（免后台常驻 · **推荐默认**） | 🛰️ 常驻守护模式（开机自启 · 兼容原习惯） |
+| 对比维度 | 🐾 托管启动模式（免后台常驻 · **推荐默认**） | 🛰️ 常驻守护模式（开机自启 · 兼容原习惯） |
 | --- | --- | --- |
 | **开机自启** | ❌ 不注册开机自启 | ✅ 注册开机自启（Windows Startup / macOS `LaunchAgent`） |
 | **平时后台驻留** | **0 进程常驻**（未启动 Antigravity 时不占任何后台进程） | 1 个轻量原生守护进程在后台持续监听 |
-| **日常启动入口** | 通过插件启动入口打开：<br/>• Windows：开始菜单 / 桌面「`Antigravity (AGY Claude Style)`」快捷方式<br/>• macOS：`Antigravity (AGY Claude Style).app` 或 `launch-antigravity.command`<br/>• 脚本模式：`launch.bat` / `./launch.sh` / `npm run managed` | 直接点击系统原版 Antigravity 桌面或程序坞图标 |
+| **日常启动入口** | 通过插件启动入口打开：<br/>• Windows：开始菜单 / 桌面「`Antigravity (AGY Pet)`」快捷方式<br/>• macOS：`Antigravity (AGY Pet).app` 或 `launch-antigravity.command`<br/>• 脚本模式：`launch.bat` / `./launch.sh` / `npm run managed` | 直接点击系统原版 Antigravity 桌面或程序坞图标 |
 | **CDP 启动与接管** | 自动附加 `--remote-debugging-port=0` 启动（若已运行且未开 CDP，快捷方式/启动器及 `npm run managed` 会自动温和重启；`launch.bat` / `./launch.sh` 可加 `--relaunch`），并拉起带 `--exit-on-host-close` 的 watcher | 后台持续监听 CDP；若发现未开 CDP 的实例且 `autoRelaunchWithCdp` 为 `true` 时自动温和重启接管 |
 | **关闭后行为与宽限保护** | Antigravity 所有窗口及进程关闭后 **watcher 自动退出**，不留后台进程；且内置 **90 秒启动宽限保护**（`--startup-grace`），防止启动失败或中途取消时孤儿进程挂起 | 持续在后台待命等待下次启动（除非在 `config.json` 中手动设置 `"exitOnHostClose": true`） |
 
@@ -163,35 +173,37 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
 <a id="方式一windows-独立安装器目标机器无需-nodejs"></a>
 ### 🪟 方式一：Windows 独立安装器（目标机器无需 Node.js）
 
-1. 直接从 [Releases](https://github.com/0DNANCY/agy-claude-style/releases) 下载 `AGY-Claude-Style-v2.0.0-Windows-x64.exe`（对应版本），或在已安装 Node.js >= 22 的 Windows 环境克隆仓库从源码构建：
+1. 直接从 [Releases](https://github.com/Mexix-Collab/agy-pet/releases) 下载内置 114 段高清透明动画的 `AGY-Pet-v2.0.0-Windows-x64.exe`，或在已安装 Node.js >= 22 的 Windows 环境克隆仓库从源码构建：
    ```bash
-   git clone https://github.com/0DNANCY/agy-claude-style.git
-   cd agy-claude-style
+   git clone https://github.com/Mexix-Collab/agy-pet.git
+   cd agy-pet
    npm run build:installer
    ```
-   构建完成后会在项目根目录生成带有像素螃蟹图标的单文件 `AGY-Claude-Style-v<version>-Windows-x64.exe` 🦀。
+   > 提示：从源码自行构建时，可将自定义透明 `.webm` 动作放入 `neko-studio/webm-opt/` 目录，或安装后通过宠物右键「📂 打开动画素材目录」放入扩展动画。
 
-2. 双击运行 `AGY-Claude-Style-v<version>-Windows-x64.exe`（可分发到未安装 Node.js 的 Windows 电脑直接运行）：
-   - **GUI 模式选择**：安装器界面提供运行模式切换单选框——**「免后台常驻 · 随 Antigravity 启动并自动退出（推荐）」**（托管启动模式）与**「开机自启 · 后台常驻监听」**（常驻守护模式），并可勾选**「在桌面创建「`Antigravity (AGY Claude Style)`」启动快捷方式」**（默认勾选）。选择后点击「开始安装」（已安装时显示「应用模式 / 升级」）即可安装或无损切换模式。
-   - **资源部署与配置保留**：自动检测本机 Antigravity Desktop，将独立运行环境与插件资源部署至 `%LOCALAPPDATA%\agy-claude-style`（记录模式状态至 `.install-mode`；若已存在 `config.json` 则自动保留原有用户配置）。
-   - **统一托管启动快捷方式 (`Antigravity (AGY Claude Style).lnk`)**：安装器会在安装目录、开始菜单（及可选桌面）生成 `Antigravity (AGY Claude Style).lnk`，直接指向 `agy-claude-style-watcher.exe --launch --relaunch --exit-on-host-close --dir "<installDir>"`。双击即可带 CDP 启动（或温和重启接管）Antigravity，并在宿主关闭后自动退出 watcher。
+2. 双击运行 `AGY-Pet-v<version>-Windows-x64.exe`（可分发到未安装 Node.js 的 Windows 电脑直接运行）：
+   - **GUI 模式选择**：安装器界面提供运行模式切换单选框——**「免后台常驻 · 随 Antigravity 启动并自动退出（推荐）」**（托管启动模式）与**「开机自启 · 后台常驻监听」**（常驻守护模式），并可勾选**「在桌面创建「`Antigravity (AGY Pet)`」启动快捷方式」**与**「集成并启用 `agy-fast` 加速插件」**。选择后点击「开始安装」（已安装时显示「应用模式 / 升级」）即可安装或无损切换模式。
+   - **资源部署与无缝迁移**：自动检测本机 Antigravity Desktop，将独立运行环境与插件资源部署至 `%LOCALAPPDATA%\agy-pet`（升级时保留原有 `config.json` / `desktop-pet.json` / `pet-todos.json`，从旧版 `agy-claude-style` 升级亦自动平滑迁移配置并清理旧快捷方式）。
+   - **统一托管启动快捷方式 (`Antigravity (AGY Pet).lnk`)**：安装器会在安装目录、开始菜单（及可选桌面）生成 `Antigravity (AGY Pet).lnk`，直接指向 `agy-pet-watcher.exe --launch --relaunch --exit-on-host-close --dir "<installDir>"`。双击即可带 CDP 启动（或温和重启接管）Antigravity，并在宿主关闭后自动退出 watcher。
    - **两种模式行为**：
-     - **托管启动模式（默认）**：不注册 Windows Startup 开机自启（若此前安装过常驻模式，会自动清理 `AGY-Claude-Style.lnk` 并停止旧常驻守护）；安装完成时仅在检测到 Antigravity 已开启 CDP 端口的情况下才临时拉起 `--exit-on-host-close` watcher 完成注入，否则保持后台 0 进程常驻。
-     - **常驻守护模式**：额外注册 Windows 开机自启快捷方式（`Startup\AGY-Claude-Style.lnk`）并立即启动后台静默守护进程 `agy-claude-style-watcher.exe` 持续监听。
-   - **卸载还原**：两种模式均会注册 Windows「设置 → 应用」卸载项；在安装器界面点击「卸载并恢复原版」或在系统「设置 → 应用」中卸载，可自动停止守护、删除 Startup / 开始菜单 / 桌面快捷方式并恢复原生界面。
+     - **托管启动模式（默认）**：不注册 Windows Startup 开机自启（若此前安装过常驻模式，会自动清理 `AGY-Pet.lnk` 并停止旧常驻守护）；安装完成时仅在检测到 Antigravity 已开启 CDP 端口的情况下才临时拉起 `--exit-on-host-close` watcher 完成注入，否则保持后台 0 进程常驻。
+     - **常驻守护模式**：额外注册 Windows 开机自启快捷方式（`Startup\AGY-Pet.lnk`）并立即启动后台静默守护进程 `agy-pet-watcher.exe` 持续监听。
+   - **卸载还原**：两种模式均会注册 Windows「设置 → 应用」卸载项；在安装器界面点击「卸载并恢复」或在系统「设置 → 应用」中卸载，可自动停止守护、删除 Startup / 开始菜单 / 桌面快捷方式并恢复原生界面。
 
 3. 安装器支持的命令行参数：
    ```text
-   AGY-Claude-Style-v2.0.0-Windows-x64.exe [--silent | /S | -s] [--uninstall] [--status]
-                                           [--mode=managed | --mode=daemon | --managed | --daemon]
-                                           [--desktop-shortcut | --no-desktop-shortcut]
-                                           [--no-autostart] [--no-kill-legacy]
-                                           [--install-dir <路径>] [--cdp-port <端口>]
-                                           [--out <结果JSON路径>] [--popup]
+   AGY-Pet-v2.0.0-Windows-x64.exe [--silent | /S | -s] [--uninstall] [--status]
+                                  [--mode=managed | --mode=daemon | --managed | --daemon]
+                                  [--desktop-shortcut | --no-desktop-shortcut]
+                                  [--agy-fast | --no-agy-fast]
+                                  [--no-autostart] [--no-kill-legacy]
+                                  [--install-dir <路径>] [--cdp-port <端口>]
+                                  [--out <结果JSON路径>] [--popup]
    ```
    - `--mode=managed` / `--managed`：以托管启动模式安装或切换（默认模式，不写入 Startup 自启）。
    - `--mode=daemon` / `--daemon`：以常驻守护模式安装或切换（写入 Startup 开机自启并常驻后台）。
-   - `--desktop-shortcut` / `--no-desktop-shortcut`：控制是否在桌面创建 `Antigravity (AGY Claude Style).lnk` 启动快捷方式（默认创建）。
+   - `--desktop-shortcut` / `--no-desktop-shortcut`：控制是否在桌面创建 `Antigravity (AGY Pet).lnk` 启动快捷方式（默认创建）。
+   - `--agy-fast` / `--no-agy-fast`：控制是否同时部署并启用内置 `agy-fast` 加速插件（默认启用）。
    - `--no-autostart`：跳过 Startup、开始菜单、桌面快捷方式及卸载注册表写入（未显式传 `--mode` 时按 `managed` 模式处理）。
 
 ---
@@ -199,28 +211,28 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
 <a id="方式二macos-独立应用目标机器无需-nodejs"></a>
 ### 🍎 方式二：macOS 独立应用（目标机器无需 Node.js）
 
-1. 直接从 [Releases](https://github.com/0DNANCY/agy-claude-style/releases) 下载 `AGY-Claude-Style-v2.0.0-macOS-universal.dmg`（对应版本），或在已安装 Node.js >= 22 与 Xcode Command Line Tools 的 macOS 环境从源码构建：
+1. 直接从 [Releases](https://github.com/Mexix-Collab/agy-pet/releases) 下载 `AGY-Pet-v2.0.0-macOS-universal.dmg`（对应版本），或在已安装 Node.js >= 22 与 Xcode Command Line Tools 的 macOS 环境从源码构建：
    ```bash
-   git clone https://github.com/0DNANCY/agy-claude-style.git
-   cd agy-claude-style
+   git clone https://github.com/Mexix-Collab/agy-pet.git
+   cd agy-pet
    npm run build:macos
    ```
-   构建完成后会在项目根目录生成通用架构（`arm64` + `x86_64`）的 `AGY Claude Style.app` 与 `AGY-Claude-Style-v<version>-macOS-universal.dmg` 🦀。
+   构建完成后会在项目根目录生成通用架构（`arm64` + `x86_64`）的 `AGY Pet.app` 与 `AGY-Pet-v<version>-macOS-universal.dmg` 🐾。
 
-2. 打开 `.dmg`，将 `AGY Claude Style.app` 拖入「应用程序」（或直接双击运行）：
-   - 若首次打开时 macOS 提示“无法验证开发者”（Release 构建采用 Ad-hoc 签名），请**右键点击 `AGY Claude Style.app` → 打开**，或在终端执行 `xattr -cr "/Applications/AGY Claude Style.app"`。
-   - **GUI 模式选择**：打开 `AGY Claude Style.app` 后，可在界面选择运行模式——**「免后台常驻 · 随 Antigravity 启动并自动退出（推荐）」**（托管启动模式）或**「开机自启 · 后台常驻监听」**（常驻守护模式），并勾选**「在 `~/Applications` 创建「`Antigravity (AGY Claude Style).app`」启动器」**（默认勾选），然后点击「开始安装」（已安装时显示「应用模式 / 升级」）。
-   - **资源部署与托管启动入口**：自动检测本机 `Antigravity.app`，将独立运行时与插件资源部署至 `~/Library/Application Support/agy-claude-style`（升级时自动保留已有 `config.json`，并写入 `.install-mode`），同时生成两个托管启动入口：
-     - **`Antigravity (AGY Claude Style).app`**：生成在安装目录与 `~/Applications/`（默认），点击后在后台脱离启动 `agy-claude-style-watcher --launch --relaunch --exit-on-host-close --dir "<installDir>"`，自动附加 CDP 参数启动或温和重启 Antigravity 并在宿主关闭后自动退出。
-     - **`launch-antigravity.command`**：位于安装目录 `~/Library/Application Support/agy-claude-style/launch-antigravity.command`，内部同样调用上述托管启动命令并在后台脱离运行，方便在访达或终端中直接启动。
+2. 打开 `.dmg`，将 `AGY Pet.app` 拖入「应用程序」（或直接双击运行）：
+   - 若首次打开时 macOS 提示“无法验证开发者”（Release 构建采用 Ad-hoc 签名），请**右键点击 `AGY Pet.app` → 打开**，或在终端执行 `xattr -cr "/Applications/AGY Pet.app"`。
+   - **GUI 模式选择**：打开 `AGY Pet.app` 后，可在界面选择运行模式——**「免后台常驻 · 随 Antigravity 启动并自动退出（推荐）」**（托管启动模式）或**「开机自启 · 后台常驻监听」**（常驻守护模式），并勾选**「在 `~/Applications` 创建「`Antigravity (AGY Pet).app`」启动器」**（默认勾选），然后点击「开始安装」（已安装时显示「应用模式 / 升级」）。
+   - **资源部署与托管启动入口**：自动检测本机 `Antigravity.app`，将独立运行时与插件资源部署至 `~/Library/Application Support/agy-pet`（升级时自动保留已有 `config.json`，并写入 `.install-mode`），同时生成两个托管启动入口：
+     - **`Antigravity (AGY Pet).app`**：生成在安装目录与 `~/Applications/`（默认），点击后在后台脱离启动 `agy-pet-watcher --launch --relaunch --exit-on-host-close --dir "<installDir>"`，自动附加 CDP 参数启动或温和重启 Antigravity 并在宿主关闭后自动退出。
+     - **`launch-antigravity.command`**：位于安装目录 `~/Library/Application Support/agy-pet/launch-antigravity.command`，内部同样调用上述托管启动命令并在后台脱离运行，方便在访达或终端中直接启动。
    - **两种模式行为**：
-     - **托管启动模式（默认）**：**不注册 `LaunchAgent`**（若此前存在 `~/Library/LaunchAgents/io.github.0dnancy.agy-claude-style.plist` 会自动 unload 并删除），平时后台 0 进程常驻；日常通过 `Antigravity (AGY Claude Style).app` 或 `launch-antigravity.command` 启动即可。
-     - **常驻守护模式**：注册 `LaunchAgent`（`~/Library/LaunchAgents/io.github.0dnancy.agy-claude-style.plist`）实现登录自启，并立即启动原生 Swift 后台守护进程 `agy-claude-style-watcher` 实时注入及热更新。
-   - **卸载还原**：重新打开 `AGY Claude Style.app` 点击「卸载并恢复原版」，即可自动停止守护、卸载并删除 `LaunchAgent`、清理 `~/Applications/Antigravity (AGY Claude Style).app` 与安装目录并恢复原版界面。
+     - **托管启动模式（默认）**：**不注册 `LaunchAgent`**（若此前存在 `~/Library/LaunchAgents/io.github.agy-pet.plist` 会自动 unload 并删除），平时后台 0 进程常驻；日常通过 `Antigravity (AGY Pet).app` 或 `launch-antigravity.command` 启动即可。
+     - **常驻守护模式**：注册 `LaunchAgent`（`~/Library/LaunchAgents/io.github.agy-pet.plist`）实现登录自启，并立即启动原生 Swift 后台守护进程 `agy-pet-watcher` 实时注入及热更新。
+   - **卸载还原**：重新打开 `AGY Pet.app` 点击「卸载并恢复原版」，即可自动停止守护、卸载并删除 `LaunchAgent`、清理 `~/Applications/Antigravity (AGY Pet).app` 与安装目录并恢复原版界面。
 
 3. 安装器支持的命令行参数：
    ```text
-   "/Applications/AGY Claude Style.app/Contents/MacOS/AGY Claude Style" \
+   "/Applications/AGY Pet.app/Contents/MacOS/AGY Pet" \
      [--silent | /S | -s] [--uninstall] [--status] \
      [--mode=managed | --mode=daemon | --managed | --daemon] \
      [--app-launcher | --no-app-launcher] \
@@ -230,7 +242,7 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
    ```
    - `--mode=managed` / `--managed`：以托管启动模式安装或切换（默认模式，不注册 `LaunchAgent`）。
    - `--mode=daemon` / `--daemon`：以常驻守护模式安装或切换（写入 `LaunchAgent` 登录自启并常驻后台）。
-   - `--app-launcher` / `--no-app-launcher`：控制是否在 `~/Applications` 创建 `Antigravity (AGY Claude Style).app` 启动器（默认创建）。
+   - `--app-launcher` / `--no-app-launcher`：控制是否在 `~/Applications` 创建 `Antigravity (AGY Pet).app` 启动器（默认创建）。
    - `--no-autostart`：跳过 `LaunchAgent` 与 `~/Applications` 启动器写入（未显式传 `--mode` 时按 `managed` 模式处理）。
 
 ---
@@ -240,8 +252,8 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
 
 1. 克隆仓库并准备配置文件（可选，若不创建 `config.json` 将自动使用内置默认配置）：
    ```bash
-   git clone https://github.com/0DNANCY/agy-claude-style.git
-   cd agy-claude-style
+   git clone https://github.com/Mexix-Collab/agy-pet.git
+   cd agy-pet
    cp config.example.json config.json
    ```
 
@@ -310,7 +322,7 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
 
 > [!NOTE]
 > **关于 `exitOnHostClose` 与托管启动模式的行为区别**：
-> - **托管启动模式**（Windows `Antigravity (AGY Claude Style).lnk`、macOS `.app` / `launch-antigravity.command`、`launch.bat` / `./launch.sh` / `npm run managed`）：watcher 启动时会显式携带 `--exit-on-host-close`（或 `--managed`），**即使 `config.json` 中 `exitOnHostClose` 为 `false`，也会在 Antigravity 全部窗口及进程关闭后自动退出**，并启用 **90 秒启动宽限保护**（`--startup-grace`）防止宿主启动失败或中途关闭时孤儿进程挂起。
+> - **托管启动模式**（Windows `Antigravity (AGY Pet).lnk`、macOS `.app` / `launch-antigravity.command`、`launch.bat` / `./launch.sh` / `npm run managed`）：watcher 启动时会显式携带 `--exit-on-host-close`（或 `--managed`），**即使 `config.json` 中 `exitOnHostClose` 为 `false`，也会在 Antigravity 全部窗口及进程关闭后自动退出**，并启用 **90 秒启动宽限保护**（`--startup-grace`）防止宿主启动失败或中途关闭时孤儿进程挂起。
 > - **常驻守护模式**（直接运行 `node inject.js --watch` / `launch.bat --daemon` / `./launch.sh --daemon` / 安装器 `daemon` 模式）：默认 `exitOnHostClose: false` 会保持后台常驻；如果你手动在 `config.json` 中将其改为 `true`，守护进程只会在**至少成功注入过一次窗口且之后所有宿主全部关闭**时退出，不会在开机等待 Antigravity 打开期间因启动宽限超时提前退出。
 
 ### 🛡️ 热更新、配置合并与守护进程安全机制
@@ -324,7 +336,7 @@ AGY Claude Style 提供两种运行模式。**默认推荐「托管启动模式�
 ## 🗂️ 项目结构
 
 ```text
-agy-claude-style/
+agy-pet/
 ├── .github/workflows/                 # GitHub Actions CI 测试与自动构建发布 Release 工作流
 │   ├── _build-and-test.yml            # 共享可复用工作流（统一版本解析、跨平台测试与产物命名）
 │   ├── ci.yml                         # PR / main 分支跨平台测试与编译验证
@@ -348,17 +360,26 @@ agy-claude-style/
 ├── perf-assets.js                     # 内置 31 帧 320×320 WebP 人像序列
 ├── installer/                         # Windows (C#) 与 macOS (Swift) 独立安装器及原生托管/守护进程源码
 │   ├── common/
+│   │   ├── AgyFastHelper.cs           # agy-fast 加速插件一键部署、启停与卸载辅助模块
 │   │   ├── CdpClient.cs               # C# 轻量 CDP 客户端、窗口激活、启动协调与配置热更新同步
 │   │   └── MiniJson.cs                # 零依赖 JSON 解析与序列化
 │   ├── setup/
 │   │   ├── Program.cs                 # Windows 安装/托管与常驻模式切换/升级/卸载 GUI 与 CLI 入口
 │   │   └── app.manifest               # Windows DPI 与清单配置
 │   ├── watcher/
-│   │   └── Program.cs                 # Windows 无窗 CDP 托管启动器与后台守护进程（支持 --launch / --exit-on-host-close / 90s 宽限保护）
+│   │   ├── Program.cs                 # Windows 无窗 CDP 托管启动器与后台守护进程（支持 --launch / --exit-on-host-close / --no-desktop）
+│   │   ├── DesktopNeko.cs             # Windows DirectComposition + WebView2 透明桌面宠物宿主、物理引擎、天气/待办服务与右键菜单
+│   │   ├── pet-ui.html                # 桌面宠物 Web 前端（114 段动画状态机、任务进度胶囊栈、气泡/天气/待办/弹弓交互）
+│   │   ├── WebView2Loader.dll         # Microsoft Edge WebView2 运行时加载器
+│   │   ├── app.manifest               # Windows DPI 感知清单
+│   │   └── assets/                    # 桌面宠物音效等附加资源（click-duck.wav 等）
 │   └── macos/
 │       ├── Common/                    # Swift 零依赖 JSON 解析与 URLSession WebSocket CDP 客户端 / 启动协调
 │       ├── Setup/main.swift           # macOS Cocoa GUI / 托管启动器 (.app / .command) / LaunchAgent 安装与卸载入口
 │       └── Watcher/main.swift         # macOS 原生 CDP 托管启动器与后台守护进程（支持 --launch / --exit-on-host-close / 90s 宽限保护）
+├── plugins/
+│   └── agy-fast/                      # 内置打包的 agy-fast 加速插件（来源：INK-Q/agy-fast，保留完整 MIT LICENSE）
+├── neko-studio/                       # 绿幕反混合抠像脚本（clean_greenscreen_webm.py）与提示词指南（114 段动画通过 Release 安装包分发）
 ├── scripts/
 │   ├── build-common.mjs               # 共享构建工具（图标生成、清单、ZIP 打包）
 │   ├── build-installer.mjs            # 编译生成 Windows 独立 AGY-Claude-Style-v<version>-Windows-x64.exe
@@ -405,20 +426,38 @@ npm run remove
 ---
 
 <a id="来源声明"></a>
-## 💌 来源声明
+## 💌 来源声明与第三方致谢
 
-本项目在设计与实现过程中参考并使用了以下开源项目的灵感、样式及部分源码，特此声明并致谢 🌸：
+本项目在设计与实现过程中基于或参考了以下开源项目、运行时组件与开放服务，特此明确列出并致谢 🌸：
 
-- **项目灵感来源及部分源码来源**：[https://github.com/Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)
-- **Codex 思考强度滑杆样式**：[https://github.com/Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)
-- **梁武峰思考强度滑杆样式**：[https://github.com/mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)
+### 1. 上游基础与衍生来源
+- **上游基础项目（二次开发起点）**：[0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style)（MIT License）
+  - 本项目在其 `v2.0.0` 基础上扩展开发，承接 CDP 无损动态注入、托管/守护双模式架构、5 语言 i18n、Token HUD、设置面板集成及 Windows/macOS 原生构建框架。
+- **Studio UI 风格与部分源码灵感**：[Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)（承接自上游）
+- **Codex 思考强度滑杆样式**：[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)（承接自上游）
+- **梁武峰思考强度滑杆样式**：[mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)（承接自上游）
+
+### 2. 桌面宠物交互设计与内置插件
+- **桌面宠物交互形态、动画分类池与物理玩法灵感**：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)
+  - 参考其透明桌面宠物交互理念、动作分类组织、弹簧拖拽/双击弹弓抛投/空中抓取计分（`score-popup`）、牛奶白碎碎念气泡、实时天气与头顶待办清单及悬停快捷键体验；Windows 桌面宠物宿主与前端由本项目基于 C# WinForms + DirectComposition + WebView2 独立实现。
+- **内置加速插件 `agy-fast`**：[INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（MIT License，作者 `inkwhite`）
+  - 位于 `plugins/agy-fast/`，完整保留其原始 [LICENSE](plugins/agy-fast/LICENSE) 与元信息，在安装器与宠物右键中提供可选的一键部署/启停集成。
+
+### 3. 第三方运行时组件与开放 API
+- **Microsoft Edge WebView2 Loader (`WebView2Loader.dll`)**：来自 Microsoft Edge WebView2 SDK 可再分发加载器，用于在 Windows 上通过 DirectComposition 渲染透明桌宠页面。
+- **Open-Meteo API**（[open-meteo.com](https://open-meteo.com/)）：用于桌面宠物实时天气查询与城市地理编码（非商业免费开放接口）。
+- **ip-api.com** / **ipwho.is**：当用户未手动配置天气城市时，用作出口 IP 粗略城市定位的回退接口（用户可随时在宠物右键自定义城市名）。
+
+### 4. 素材与字体合规说明
+- **动画素材**：114 段桌面宠物透明 WebM 动画及 20 套输入框趴框/坐姿猫娘动画均为 AI 生成并通过自研绿幕反混合抠像脚本（`neko-studio/clean_greenscreen_webm.py`）二次加工制作。
+- **气泡字体**：开源仓库不附带受商业版权保护的字体文件，默认使用系统圆体/黑体字体栈；如需自定义可爱字体，请自行获取拥有合法授权或 SIL OFL 开源协议的 `.ttf` 字体文件。
 
 ---
 
 <a id="开源协议"></a>
 ## 📜 开源协议
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于 [MIT License](LICENSE) 开源，并完整保留上游项目与内置第三方组件的原始版权声明。
 
 <div align="center">
 

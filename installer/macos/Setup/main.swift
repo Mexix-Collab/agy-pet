@@ -46,13 +46,13 @@ final class OperationResult {
 }
 
 enum InstallerCore {
-    static let launchAgentLabel = "io.github.0dnancy.agy-claude-style"
-    static let launchAgentFileName = "io.github.0dnancy.agy-claude-style.plist"
-    static let launcherAppName = "Antigravity (AGY Claude Style).app"
-    static let launcherBundleId = "io.github.0dnancy.agy-claude-style.launcher"
+    static let launchAgentLabel = "io.github.agy-pet"
+    static let launchAgentFileName = "io.github.agy-pet.plist"
+    static let launcherAppName = "Antigravity (AGY Pet).app"
+    static let launcherBundleId = "io.github.agy-pet.launcher"
     static let installModeFileName = ".install-mode"
-    static let watcherExeName = "agy-claude-style-watcher"
-    static let selfInstalledExeName = "agy-claude-style-installer"
+    static let watcherExeName = "agy-pet-watcher"
+    static let selfInstalledExeName = "agy-pet-installer"
 
     static func getTestSystemRoot() -> String? {
         guard let raw = ProcessInfo.processInfo.environment["AGY_CS_TEST_SYSTEM_ROOT"]?
@@ -65,7 +65,7 @@ enum InstallerCore {
 
     static func getDefaultInstallDir() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return (home as NSString).appendingPathComponent("Library/Application Support/agy-claude-style")
+        return (home as NSString).appendingPathComponent("Library/Application Support/agy-pet")
     }
 
     static func getLaunchAgentPlistPath() -> String {

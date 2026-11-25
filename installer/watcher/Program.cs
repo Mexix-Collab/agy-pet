@@ -16,6 +16,8 @@ namespace AgyClaudeStyle.Watcher
         public string BootstrapScriptId;
         public string ConfigScriptId;
         public string Title;
+        public string Url;
+        public bool IsMainPage;
     }
 
     internal static class Program
@@ -28,11 +30,27 @@ namespace AgyClaudeStyle.Watcher
         private static string _logFile;
         private static string _pidFile;
         private static bool _isWatch;
+        private static bool _noDesktop = false;
         private static int _pollMs = 2000;
+
+        private static bool IsTempTestDir(string dir)
+        {
+            try
+            {
+                string full = Path.GetFullPath(dir).TrimEnd('\\', '/');
+                string tmp = Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\', '/');
+                return full.StartsWith(tmp, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         [STAThread]
         private static int Main(string[] args)
         {
+            try { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null); } catch { }
             string mode = "watch";
             string customDir = null;
             int? overridePort = null;
@@ -74,6 +92,7 @@ namespace AgyClaudeStyle.Watcher
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
                 else if (a == "--launch") mode = "launch";
+                else if (a == "--no-desktop") _noDesktop = true;
                 else if (a == "--relaunch") relaunchFlag = true;
                 else if (a == "--replace") replaceFlag = true;
                 else if (a == "--exit-on-host-close") exitOnHostCloseFlag = true;
@@ -151,7 +170,7 @@ namespace AgyClaudeStyle.Watcher
             if (string.Equals(Environment.GetEnvironmentVariable("AGY_CS_NO_UI"), "1", StringComparison.Ordinal)) return;
             try
             {
-                MessageBoxW(IntPtr.Zero, message ?? "启动失败", "AGY Claude Style", 0x00000010u);
+                MessageBoxW(IntPtr.Zero, message ?? "启动失败", "AGY Pet", 0x00000010u);
             }
             catch { }
         }
@@ -460,8 +479,154 @@ namespace AgyClaudeStyle.Watcher
                 Dictionary<string, object> initCfg = CdpHelper.ReadConfig(_baseDir, manifest);
                 bool cfgAutoRelaunch = GetConfigBool(initCfg, "autoRelaunchWithCdp", true);
                 bool cfgExitOnHostClose = GetConfigBool(initCfg, "exitOnHostClose", false);
-                Log(string.Format("[*] AGY Claude Style (agy-claude-style) {0}启动 (PID {1})，每 {2}ms 检查一次窗口",
+                try
+                {
+                    string[] oldExes = Directory.GetFiles(_baseDir, "agy-*-watcher.exe.old*");
+                    for (int oi = 0; oi < oldExes.Length; oi++)
+                    {
+                        try { File.Delete(oldExes[oi]); } catch { }
+                    }
+                }
+                catch { }
+                Log(string.Format("[*] AGY Pet (agy-pet) {0}启动 (PID {1})，每 {2}ms 检查一次窗口",
                     exitOnHostCloseFlag ? "托管监听模式" : "守护模式", selfPid, _pollMs));
+
+                ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
+                object activateLock = new object();
+                string pendingActivateCid = "";
+                string pendingActivateTitle = "";
+                string pendingActivateWinTitle = "";
+                DateTime pendingActivateUntilUtc = DateTime.MinValue;
+                ManualResetEventSlim wakePollEvent = new ManualResetEventSlim(false);
+
+                Func<AttachedEntry, string, string, string, bool, Task> activateEntryAsync = async (ae, actCid, actTitle, actWinTitle, isFreshWindow) =>
+                {
+                    if (ae == null || ae.Session == null || !ae.IsMainPage) return;
+                    CdpSession sess = ae.Session;
+                    // For freshly reopened windows from background tray, give Antigravity auth/bootstrap breathing room
+                    // before issuing Page.bringToFront or SPA navigation so it never interrupts initial loading.
+                    if (isFreshWindow)
+                    {
+                        await Task.Delay(900).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        try
+                        {
+                            await sess.SendAsync("Page.bringToFront", null, 3000).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+                    const int maxAttempts = 36;
+                    string lastPending = "";
+                    for (int attempt = 0; attempt < maxAttempts; attempt++)
+                    {
+                        if (attempt > 0)
+                        {
+                            await Task.Delay(450).ConfigureAwait(false);
+                        }
+                        lock (activateLock)
+                        {
+                            if (DateTime.UtcNow > pendingActivateUntilUtc) break;
+                            if (!string.Equals(pendingActivateCid, actCid ?? "", StringComparison.Ordinal)) break;
+                        }
+                        if (sess.IsClosed) break;
+                        bool allowRouter = !isFreshWindow || attempt >= 8;
+                        string js = "(() => { try { return window.__agClaudeStyle && typeof window.__agClaudeStyle.activateConversation === 'function' ? window.__agClaudeStyle.activateConversation("
+                            + MiniJson.Stringify(actCid ?? "", false) + ", " + MiniJson.Stringify(actTitle ?? "", false)
+                            + ", { allowRouterFallback: " + (allowRouter ? "true" : "false") + " }) : null; } catch (e) { return null; } })()";
+                        try
+                        {
+                            object evalRes = await sess.EvaluateAsync(js, false).ConfigureAwait(false);
+                            Dictionary<string, object> resDict = evalRes as Dictionary<string, object>;
+                            if (resDict != null)
+                            {
+                                bool matched = resDict.ContainsKey("matched") && Equals(resDict["matched"], true);
+                                if (matched)
+                                {
+                                    string by = resDict.ContainsKey("by") ? Convert.ToString(resDict["by"]) : (resDict.ContainsKey("alreadyActive") ? "alreadyActive" : "ok");
+                                    Log(string.Format("[↪] 会话激活成功: {0} ({1}, attempt={2})", actCid, by, attempt + 1));
+                                    if (isFreshWindow)
+                                    {
+                                        try { await sess.SendAsync("Page.bringToFront", null, 2000).ConfigureAwait(false); } catch { }
+                                    }
+                                    lock (activateLock)
+                                    {
+                                        if (string.Equals(pendingActivateCid, actCid ?? "", StringComparison.Ordinal))
+                                        {
+                                            pendingActivateCid = "";
+                                            pendingActivateTitle = "";
+                                            pendingActivateWinTitle = "";
+                                            pendingActivateUntilUtc = DateTime.MinValue;
+                                        }
+                                    }
+                                    break;
+                                }
+                                else if (resDict.ContainsKey("pending"))
+                                {
+                                    lastPending = Convert.ToString(resDict["pending"]) ?? "";
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                    if (!string.IsNullOrEmpty(lastPending))
+                    {
+                        lock (activateLock)
+                        {
+                            if (string.Equals(pendingActivateCid, actCid ?? "", StringComparison.Ordinal))
+                            {
+                                Log(string.Format("[↪] 会话激活未完成: {0} (lastPending={1})", actCid, lastPending));
+                            }
+                        }
+                    }
+                };
+
+                Action<string, string, string> navigateConversation = (cid, taskTitle, winTitle) =>
+                {
+                    lock (activateLock)
+                    {
+                        pendingActivateCid = cid ?? "";
+                        pendingActivateTitle = taskTitle ?? "";
+                        pendingActivateWinTitle = winTitle ?? "";
+                        pendingActivateUntilUtc = DateTime.UtcNow.AddSeconds(20);
+                    }
+                    try { wakePollEvent.Set(); } catch { }
+                    List<AttachedEntry> candidates = new List<AttachedEntry>();
+                    List<AttachedEntry> allMain = new List<AttachedEntry>();
+                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                    {
+                        AttachedEntry ae = kv.Value;
+                        if (ae == null || ae.Session == null || !ae.IsMainPage) continue;
+                        allMain.Add(ae);
+                        if (!string.IsNullOrEmpty(winTitle) && !string.IsNullOrEmpty(ae.Title) &&
+                            ae.Title.IndexOf(winTitle, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            candidates.Add(ae);
+                        }
+                    }
+                    List<AttachedEntry> targets = candidates.Count > 0 ? candidates : allMain;
+                    for (int i = 0; i < targets.Count; i++)
+                    {
+                        AttachedEntry targetEntry = targets[i];
+                        Task.Run(() => activateEntryAsync(targetEntry, cid ?? "", taskTitle ?? "", winTitle ?? "", false));
+                    }
+                };
+
+                DesktopNekoHost nekoHost = null;
+                if (!_noDesktop && !IsTempTestDir(_baseDir))
+                {
+                    bool mascotOn = !initCfg.ContainsKey("mascot") || !string.Equals(Convert.ToString(initCfg["mascot"]), "off", StringComparison.OrdinalIgnoreCase);
+                    bool desktopOn = !initCfg.ContainsKey("desktopPet") || !Equals(initCfg["desktopPet"], false);
+                    nekoHost = DesktopNekoHost.TryStart(
+                        _baseDir,
+                        mascotOn && desktopOn,
+                        (vis) =>
+                        {
+                            try { CdpHelper.UpdateConfigSetting(_baseDir, manifest, "desktopPet", vis); } catch { }
+                        },
+                        navigateConversation);
+                }
 
                 string currentCodeHash;
                 string currentCssHash;
@@ -470,7 +635,6 @@ namespace AgyClaudeStyle.Watcher
                 string currentConfigExpr = CdpHelper.BuildConfigScriptExpression(_baseDir, manifest, currentCodeHash);
                 object exprLock = new object();
                 bool hadAttachedWindow = false;
-                ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
                 EventWaitHandle stopSignal = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\AGYClaudeStyleStop_" + dirHash);
 
@@ -577,12 +741,16 @@ namespace AgyClaudeStyle.Watcher
                         entry.BootstrapScriptId = null;
                         entry.ConfigScriptId = null;
                         entry.Title = CdpHelper.ShortTitle(page);
+                        entry.Url = page.Url ?? "";
+                        entry.IsMainPage = string.Equals(page.Type, "page", StringComparison.OrdinalIgnoreCase) ||
+                            (!string.IsNullOrEmpty(entry.Url) && !entry.Url.StartsWith("plugin://", StringComparison.OrdinalIgnoreCase));
                         attached[page.Id] = entry;
 
                         session.OnClose = () =>
                         {
                             AttachedEntry ignored;
                             attached.TryRemove(page.Id, out ignored);
+                            if (nekoHost != null) nekoHost.RemoveSource(page.Id);
                             Log("[-] 窗口已关闭: " + entry.Title);
                         };
 
@@ -591,8 +759,24 @@ namespace AgyClaudeStyle.Watcher
                         {
                             object bNameObj;
                             object payloadObj;
-                            if (!p.TryGetValue("name", out bNameObj) || !string.Equals(bNameObj as string, manifest.SettingBinding, StringComparison.Ordinal)) return;
+                            if (!p.TryGetValue("name", out bNameObj) || !(bNameObj is string)) return;
                             if (!p.TryGetValue("payload", out payloadObj) || !(payloadObj is string)) return;
+                            string bName = (string)bNameObj;
+                            if (string.Equals(bName, "__agCsNekoBinding", StringComparison.Ordinal))
+                            {
+                                try
+                                {
+                                    Dictionary<string, object> kvSync = MiniJson.ParseObject((string)payloadObj);
+                                    object syncObj;
+                                    if (kvSync.TryGetValue("__agCsNekoSync", out syncObj) && syncObj is Dictionary<string, object>)
+                                    {
+                                        if (nekoHost != null) nekoHost.UpdateTelemetry((Dictionary<string, object>)syncObj, page.Id, entry.Title);
+                                    }
+                                }
+                                catch { }
+                                return;
+                            }
+                            if (!string.Equals(bName, manifest.SettingBinding, StringComparison.Ordinal)) return;
                             try
                             {
                                 Dictionary<string, object> kv = MiniJson.ParseObject((string)payloadObj);
@@ -604,6 +788,15 @@ namespace AgyClaudeStyle.Watcher
                                     if (CdpHelper.UpdateConfigSetting(_baseDir, manifest, key, vObj))
                                     {
                                         Log("[⚙] 设置已保存: " + key + " = " + MiniJson.Stringify(vObj, false));
+                                        if (nekoHost != null && (key == "desktopPet" || key == "mascot"))
+                                        {
+                                            Dictionary<string, object> nextCfg = CdpHelper.ReadConfig(_baseDir, manifest);
+                                            bool mOn = !nextCfg.ContainsKey("mascot") || !string.Equals(Convert.ToString(nextCfg["mascot"]), "off", StringComparison.OrdinalIgnoreCase);
+                                            bool dOn = !nextCfg.ContainsKey("desktopPet") || !Equals(nextCfg["desktopPet"], false);
+                                            Dictionary<string, object> t = new Dictionary<string, object>(StringComparer.Ordinal);
+                                            t["enabled"] = mOn && dOn;
+                                            nekoHost.UpdateTelemetry(t);
+                                        }
                                     }
                                 }
                             }
@@ -614,6 +807,9 @@ namespace AgyClaudeStyle.Watcher
                         Dictionary<string, object> bindParams = new Dictionary<string, object>(StringComparer.Ordinal);
                         bindParams["name"] = manifest.SettingBinding;
                         await session.SendAsync("Runtime.addBinding", bindParams, 5000).ConfigureAwait(false);
+                        Dictionary<string, object> nekoBindParams = new Dictionary<string, object>(StringComparer.Ordinal);
+                        nekoBindParams["name"] = "__agCsNekoBinding";
+                        await session.SendAsync("Runtime.addBinding", nekoBindParams, 5000).ConfigureAwait(false);
 
                         string exprSnapshot;
                         string cfgExprSnapshot;
@@ -625,7 +821,29 @@ namespace AgyClaudeStyle.Watcher
                         Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, cfgExprSnapshot, false).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         lock (exprLock) { hadAttachedWindow = true; }
-                        Log(string.Format("[✓] 已注入 agy-claude-style: {0} ({1})", entry.Title, status));
+                        Log(string.Format("[✓] 已注入 agy-pet: {0} ({1})", entry.Title, status));
+
+                        string actCid = "";
+                        string actTitle = "";
+                        string actWinTitle = "";
+                        bool shouldAct = false;
+                        if (entry.IsMainPage)
+                        {
+                            lock (activateLock)
+                            {
+                                if (DateTime.UtcNow <= pendingActivateUntilUtc && (!string.IsNullOrEmpty(pendingActivateCid) || !string.IsNullOrEmpty(pendingActivateTitle)))
+                                {
+                                    actCid = pendingActivateCid;
+                                    actTitle = pendingActivateTitle;
+                                    actWinTitle = pendingActivateWinTitle;
+                                    shouldAct = true;
+                                }
+                            }
+                        }
+                        if (shouldAct)
+                        {
+                            Task ignoredAct = Task.Run(() => activateEntryAsync(entry, actCid, actTitle, actWinTitle, true));
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -656,6 +874,7 @@ namespace AgyClaudeStyle.Watcher
                     {
                         string name = e.Name;
                         if (string.IsNullOrEmpty(name) || name.StartsWith(".", StringComparison.Ordinal)) return;
+                        if (string.Equals(name, "desktop-pet.json", StringComparison.OrdinalIgnoreCase)) return;
                         if (!name.EndsWith(".css", StringComparison.OrdinalIgnoreCase) &&
                             !name.EndsWith(".js", StringComparison.OrdinalIgnoreCase) &&
                             !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
@@ -792,9 +1011,23 @@ namespace AgyClaudeStyle.Watcher
                                 List<Task> tasks = new List<Task>();
                                 for (int i = 0; i < pages.Count; i++)
                                 {
-                                    if (!attached.ContainsKey(pages[i].Id))
+                                    CdpPageInfo pInfo = pages[i];
+                                    AttachedEntry existingEntry;
+                                    if (!attached.TryGetValue(pInfo.Id, out existingEntry))
                                     {
-                                        tasks.Add(attachAsync(pages[i]));
+                                        tasks.Add(attachAsync(pInfo));
+                                    }
+                                    else if (existingEntry != null)
+                                    {
+                                        if (!string.IsNullOrEmpty(pInfo.Url)) existingEntry.Url = pInfo.Url;
+                                        string freshTitle = CdpHelper.ShortTitle(pInfo);
+                                        if (!string.IsNullOrEmpty(freshTitle)) existingEntry.Title = freshTitle;
+                                        if (!existingEntry.IsMainPage &&
+                                            (string.Equals(pInfo.Type, "page", StringComparison.OrdinalIgnoreCase) ||
+                                             (!string.IsNullOrEmpty(existingEntry.Url) && !existingEntry.Url.StartsWith("plugin://", StringComparison.OrdinalIgnoreCase))))
+                                        {
+                                            existingEntry.IsMainPage = true;
+                                        }
                                     }
                                 }
                                 if (tasks.Count > 0)
@@ -908,11 +1141,38 @@ namespace AgyClaudeStyle.Watcher
                         }
                         catch { }
 
-                        exitEvent.Wait(sleepMs);
+                        if (nekoHost != null && !nekoHost.IsPetUiAlive)
+                        {
+                            try
+                            {
+                                Log("[↻] 检测到桌面宠物窗体意外退出，正在自动恢复...");
+                                try { nekoHost.Dispose(); } catch { }
+                                Dictionary<string, object> curCfg = CdpHelper.ReadConfig(_baseDir, manifest);
+                                bool mOn = !curCfg.ContainsKey("mascot") || !string.Equals(Convert.ToString(curCfg["mascot"]), "off", StringComparison.OrdinalIgnoreCase);
+                                bool dOn = !curCfg.ContainsKey("desktopPet") || !Equals(curCfg["desktopPet"], false);
+                                nekoHost = DesktopNekoHost.TryStart(
+                                    _baseDir,
+                                    mOn && dOn,
+                                    (vis) => { try { CdpHelper.UpdateConfigSetting(_baseDir, manifest, "desktopPet", vis); } catch { } },
+                                    navigateConversation);
+                            }
+                            catch { }
+                        }
+
+                        bool hasPendingActivate = false;
+                        lock (activateLock)
+                        {
+                            hasPendingActivate = DateTime.UtcNow <= pendingActivateUntilUtc &&
+                                (!string.IsNullOrEmpty(pendingActivateCid) || !string.IsNullOrEmpty(pendingActivateTitle));
+                        }
+                        int effectiveSleepMs = hasPendingActivate ? Math.Min(sleepMs, 250) : sleepMs;
+                        WaitHandle.WaitAny(new WaitHandle[] { exitEvent.WaitHandle, wakePollEvent.WaitHandle }, effectiveSleepMs);
+                        try { wakePollEvent.Reset(); } catch { }
                     }
                 }
                 finally
                 {
+                    if (nekoHost != null) { try { nekoHost.Dispose(); } catch { } }
                     if (fsw != null) { try { fsw.Dispose(); } catch { } }
                     if (reloadTimer != null) { try { reloadTimer.Dispose(); } catch { } }
                     foreach (KeyValuePair<string, AttachedEntry> kv in attached)
@@ -924,6 +1184,7 @@ namespace AgyClaudeStyle.Watcher
                     }
                     try { stopWaitReg.Unregister(null); } catch { }
                     try { stopSignal.Dispose(); } catch { }
+                    try { wakePollEvent.Dispose(); } catch { }
                     try { exitEvent.Dispose(); } catch { }
                     ReleasePidFile(selfPid);
                 }

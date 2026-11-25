@@ -501,8 +501,18 @@ enum CdpHelper {
         return (computeHash(bundle), computeHash(css))
     }
 
+    static func readI18nExtra(baseDir: String) -> JsonValue {
+        let extraPath = (baseDir as NSString).appendingPathComponent("i18n-extra.json")
+        guard let text = try? String(contentsOfFile: extraPath, encoding: .utf8),
+              let parsed = try? MiniJson.parseObject(text) else {
+            return .null
+        }
+        return .object(parsed)
+    }
+
     static func buildConfigScriptExpression(baseDir: String, manifest: PluginManifest, expectedCodeHash: String) -> String {
         var payload = readConfig(baseDir: baseDir, manifest: manifest)
+        payload["i18nExtra"] = readI18nExtra(baseDir: baseDir)
         payload["binding"] = .string(manifest.settingBinding)
         payload["codeHash"] = .string(expectedCodeHash)
         let payloadJson = MiniJson.stringify(.object(payload), pretty: false)
@@ -537,6 +547,7 @@ enum CdpHelper {
         let codeHash = computeHash(bundle)
 
         var initCfg = config
+        initCfg["i18nExtra"] = readI18nExtra(baseDir: baseDir)
         initCfg["binding"] = .string(manifest.settingBinding)
         initCfg["codeHash"] = .string(codeHash)
 
@@ -742,8 +753,8 @@ enum CdpHelper {
             return .foreign
         }
         let normDir = normalizePath(baseDir)
-        let nativeExeName = "agy-claude-style-watcher"
-        let expectedNativeExe = normalizePath((normDir as NSString).appendingPathComponent(nativeExeName))
+        let nativeExeNames = ["agy-pet-watcher", "agy-claude-style-watcher"]
+        let expectedNativeExes = nativeExeNames.map { normalizePath((normDir as NSString).appendingPathComponent($0)) }
 
         let exePrefix = (cmd.components(separatedBy: " --").first ?? cmd)
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'")))
@@ -751,12 +762,12 @@ enum CdpHelper {
 
         let exeMatchesNative: Bool
         if let ep = exePath, !ep.isEmpty {
-            exeMatchesNative = (ep as NSString).lastPathComponent.lowercased() == nativeExeName
+            exeMatchesNative = nativeExeNames.contains((ep as NSString).lastPathComponent.lowercased())
         } else {
             let normPrefix = exePrefix.hasPrefix("/") ? normalizePath(exePrefix) : exePrefix
             exeMatchesNative =
-                (normPrefix == expectedNativeExe) ||
-                (!exePrefix.contains(" ") && (exePrefix as NSString).lastPathComponent.lowercased() == nativeExeName)
+                expectedNativeExes.contains(normPrefix) ||
+                (!exePrefix.contains(" ") && nativeExeNames.contains((exePrefix as NSString).lastPathComponent.lowercased()))
         }
 
         if exeMatchesNative {

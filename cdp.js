@@ -21,6 +21,7 @@ const APP_DATA = IS_MAC
 const PORT_FILE = path.join(APP_DATA, 'Antigravity', 'DevToolsActivePort');
 const PID_FILE = path.join(__dirname, '.watch.pid');
 const CONFIG_FILE = path.join(__dirname, 'config.json');
+const I18N_EXTRA_FILE = path.join(__dirname, 'i18n-extra.json');
 
 const DEFAULT_CONFIG = {
   language: 'zh-CN',
@@ -29,6 +30,7 @@ const DEFAULT_CONFIG = {
   homeRipple: true,
   composerRestyle: true,
   mascot: 'crab',
+  desktopPet: true,
   logoInk: 'accent',
   inlineStats: true,
   ringMode: 'context',
@@ -58,6 +60,7 @@ const CONFIG_VALIDATORS = {
   homeRipple: 'boolean',
   composerRestyle: 'boolean',
   mascot: ['crab', 'off'],
+  desktopPet: 'boolean',
   logoInk: ['accent', 'foreground'],
   inlineStats: 'boolean',
   ringMode: ['context', 'quota'],
@@ -108,6 +111,15 @@ function readConfig(configPath = CONFIG_FILE) {
     return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(configPath, 'utf8')) };
   } catch {
     return { ...DEFAULT_CONFIG };
+  }
+}
+
+function readI18nExtra(extraPath = I18N_EXTRA_FILE) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(extraPath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -303,7 +315,15 @@ function buildInjectExpression(customConfig) {
         }
         ${bundle}
         if (typeof globalThis.__agCsUiMain === 'function') {
-          const baseCfg = ${JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash })};
+          const baseCfg = ${JSON.stringify({
+            ...config,
+            i18nExtra:
+              customConfig && Object.prototype.hasOwnProperty.call(customConfig, 'i18nExtra')
+                ? customConfig.i18nExtra
+                : readI18nExtra(),
+            binding: SETTING_BINDING,
+            codeHash,
+          })};
           const ov = globalThis.__agCsOverrideConfig;
           const nextCfg =
             ov && typeof ov === 'object' && ov.codeHash === baseCfg.codeHash
@@ -345,7 +365,11 @@ function buildInjectExpression(customConfig) {
 function buildConfigScriptExpression(customConfig, expectedCodeHash) {
   const config = customConfig || readConfig();
   const expectedHash = expectedCodeHash || '';
-  const payload = { ...config, binding: SETTING_BINDING, codeHash: expectedHash };
+  const i18nExtra =
+    customConfig && Object.prototype.hasOwnProperty.call(customConfig, 'i18nExtra')
+      ? customConfig.i18nExtra
+      : readI18nExtra();
+  const payload = { ...config, i18nExtra, binding: SETTING_BINDING, codeHash: expectedHash };
   return `(() => {
     const nextCfg = ${JSON.stringify(payload)};
     globalThis.__agCsOverrideConfig = nextCfg;
@@ -409,7 +433,7 @@ const REMOVE_EXPRESSION = `(() => {
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
   }
   const nodes = document.querySelectorAll(
-    'style#${STYLE_ID}, style#ag-token-hud-style, .ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-ripple-canvas, .ag-cs-crab, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, #ag-cs-settings-sec, .ag-th-top-bar, .ag-th-bottom-bar, .ag-th-rim-progress, .ag-th-footer-chip, .ag-th-popover, .ag-th-turn-bar, .ag-th-reopen-pill'
+    'style#${STYLE_ID}, style#ag-token-hud-style, .ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-ripple-canvas, .ag-cs-crab, .ag-cs-neko-menu, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-quota-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, #ag-cs-settings-sec, .ag-th-top-bar, .ag-th-bottom-bar, .ag-th-rim-progress, .ag-th-footer-chip, .ag-th-popover, .ag-th-turn-bar, .ag-th-reopen-pill'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -834,16 +858,18 @@ function evaluateWatcherOwnership(rawInfo, targetDir = __dirname, targetPlatform
   }
 
   // 1. Native watcher binary check (must match executable itself, never mid-command arguments like `tail /path/watcher`).
-  const nativeExeName = targetPlatform === 'win32' ? 'agy-claude-style-watcher.exe' : 'agy-claude-style-watcher';
-  const expectedNativeExe = normalizePathForCompare(pathMod.join(normTargetDir, nativeExeName), targetPlatform);
+  const nativeExeNames = targetPlatform === 'win32'
+    ? ['agy-pet-watcher.exe', 'agy-claude-style-watcher.exe']
+    : ['agy-pet-watcher', 'agy-claude-style-watcher'];
+  const expectedNativeExes = nativeExeNames.map((n) => normalizePathForCompare(pathMod.join(normTargetDir, n), targetPlatform));
   const exePrefix = cmd.split(/\s+--/)[0].trim().replace(/^["']|["']$/g, '');
   const leadingToken = exePrefix.split(/\s+/)[0] || '';
   const exeMatchesNative = info.exePath
-    ? pathMod.basename(info.exePath).toLowerCase() === nativeExeName
+    ? nativeExeNames.includes(pathMod.basename(info.exePath).toLowerCase())
     : args && args[0]
-    ? pathMod.basename(args[0]).toLowerCase() === nativeExeName
-    : normalizePathForCompare(exePrefix, targetPlatform) === expectedNativeExe ||
-      (!/\s/.test(exePrefix) && pathMod.basename(exePrefix).toLowerCase() === nativeExeName);
+    ? nativeExeNames.includes(pathMod.basename(args[0]).toLowerCase())
+    : expectedNativeExes.includes(normalizePathForCompare(exePrefix, targetPlatform)) ||
+      (!/\s/.test(exePrefix) && nativeExeNames.includes(pathMod.basename(exePrefix).toLowerCase()));
 
   if (exeMatchesNative) {
     const dirFlag = extractDirFlagValue(cmd, args, info.cwd, targetPlatform);
@@ -1065,10 +1091,13 @@ function launchAntigravityWithCdp(opts = {}) {
   }
   const exePath = opts.appPath || findAntigravityExecutable();
   if (!exePath) return false;
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   const child = spawnFn(exePath, [flag], {
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
+    env: childEnv,
   });
   if (child && typeof child.unref === 'function') child.unref();
   return true;
@@ -1265,6 +1294,7 @@ module.exports = {
   ensureAntigravityWithCdp,
   formatCdpUnavailableMessage,
   CdpSession,
+  readI18nExtra,
   readCss,
   readRuntimeBundle,
   computeHash,

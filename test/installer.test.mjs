@@ -307,9 +307,9 @@ test('unified artifact naming and version parity stay consistent across package,
 
   assert.deepEqual(getArtifactNames('v2.0.0'), {
     version: '2.0.0',
-    windowsInstaller: 'AGY-Claude-Style-v2.0.0-Windows-x64.exe',
-    macosDmg: 'AGY-Claude-Style-v2.0.0-macOS-universal.dmg',
-    macosApp: 'AGY Claude Style.app',
+    windowsInstaller: 'AGY-Pet-v2.0.0-Windows-x64.exe',
+    macosDmg: 'AGY-Pet-v2.0.0-macOS-universal.dmg',
+    macosApp: 'AGY Pet.app',
   });
   assert.equal(createManifest('v2.0.0').version, '2.0.0');
 });
@@ -379,10 +379,10 @@ test(
     const outPreUninstallDaemon = path.join(workDir, 'pre-uninstall-daemon.json');
     const outUninstall = path.join(workDir, 'uninstall.json');
 
-    const startupLnk = path.join(testSysRoot, 'Startup', 'AGY-Claude-Style.lnk');
-    const startMenuLnk = path.join(testSysRoot, 'StartMenu', 'Antigravity (AGY Claude Style).lnk');
-    const desktopLnk = path.join(testSysRoot, 'Desktop', 'Antigravity (AGY Claude Style).lnk');
-    const localLauncherLnk = path.join(installDir, 'Antigravity (AGY Claude Style).lnk');
+    const startupLnk = path.join(testSysRoot, 'Startup', 'AGY-Pet.lnk');
+    const startMenuLnk = path.join(testSysRoot, 'StartMenu', 'Antigravity (AGY Pet).lnk');
+    const desktopLnk = path.join(testSysRoot, 'Desktop', 'Antigravity (AGY Pet).lnk');
+    const localLauncherLnk = path.join(installDir, 'Antigravity (AGY Pet).lnk');
     const pidFile = path.join(installDir, '.watch.pid');
     const modeFile = path.join(installDir, '.install-mode');
 
@@ -543,7 +543,7 @@ test(
       assert.equal(fs.existsSync(pidFile), false);
 
       // 5) Standalone watcher --watch --exit-on-host-close --startup-grace 1 --cdp-port 1 exits cleanly (code 0)
-      const watcherExe = path.join(installDir, 'agy-claude-style-watcher.exe');
+      const watcherExe = path.join(installDir, 'agy-pet-watcher.exe');
       await runExe(
         watcherExe,
         ['--watch', '--exit-on-host-close', '--startup-grace', '1', '--cdp-port', '1', '--dir', installDir],
@@ -662,8 +662,8 @@ test(
     assert.equal(installResult.ok, true);
     assert.equal(installResult.preservedExistingConfig, false);
     assert.deepEqual(installResult.injectedPages, ['Antigravity']);
-    assert.ok(fs.existsSync(path.join(installDir, 'agy-claude-style-watcher.exe')));
-    assert.ok(fs.existsSync(path.join(installDir, 'agy-claude-style-installer.exe')));
+    assert.ok(fs.existsSync(path.join(installDir, 'agy-pet-watcher.exe')));
+    assert.ok(fs.existsSync(path.join(installDir, 'agy-pet-installer.exe')));
     assert.ok(fs.existsSync(path.join(installDir, 'manifest.json')));
     assert.ok(fs.existsSync(path.join(installDir, '.watch.pid')));
 
@@ -700,7 +700,7 @@ test(
     assert.ok(injectedExpr.includes(`"ringMode":"${expectedCfgObj.ringMode}"`));
 
     // Verify watcher --once CLI mode works standalone against CDP
-    const watcherExe = path.join(installDir, 'agy-claude-style-watcher.exe');
+    const watcherExe = path.join(installDir, 'agy-pet-watcher.exe');
     const onceOut = path.join(workDir, 'once.json');
     await runExe(
       watcherExe,
@@ -776,7 +776,7 @@ test(
     assert.equal(cfgAfterUpgrade.palette, targetPalette);
 
     // 5. Test --uninstall from installed copy inside installDir (exercises self-delete & CDP cleanup)
-    const installedSelf = path.join(installDir, 'agy-claude-style-installer.exe');
+    const installedSelf = path.join(installDir, 'agy-pet-installer.exe');
     await runExe(
       installedSelf,
       [

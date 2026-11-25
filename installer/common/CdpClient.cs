@@ -16,6 +16,7 @@ namespace AgyClaudeStyle
     public class CdpPageInfo
     {
         public string Id;
+        public string Type;
         public string Title;
         public string Url;
         public string WebSocketDebuggerUrl;
@@ -87,6 +88,7 @@ namespace AgyClaudeStyle
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private int _nextId = 0;
         private volatile bool _closed = false;
+        public bool IsClosed { get { return _closed; } }
 
         public Action OnClose;
 
@@ -451,13 +453,19 @@ namespace AgyClaudeStyle
                 bool isPage = type == "page";
                 bool isSwarmSidecar = type == "iframe" &&
                     pageUrl.StartsWith("plugin://swarm--", StringComparison.OrdinalIgnoreCase);
-                if ((isPage || isSwarmSidecar) &&
+                bool isHttpOrAppPage = isPage &&
+                    (pageUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                     pageUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                     pageUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ||
+                     pageUrl.StartsWith("vscode-file://", StringComparison.OrdinalIgnoreCase));
+                if ((isHttpOrAppPage || isSwarmSidecar) &&
                     !string.IsNullOrEmpty(wsUrl) &&
                     !pageUrl.StartsWith("devtools://", StringComparison.OrdinalIgnoreCase) &&
                     !pageUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     CdpPageInfo info = new CdpPageInfo();
                     info.Id = GetStr(t, "id") ?? wsUrl;
+                    info.Type = type ?? "";
                     info.Title = GetStr(t, "title") ?? "";
                     info.Url = pageUrl;
                     info.WebSocketDebuggerUrl = wsUrl;
@@ -592,6 +600,20 @@ namespace AgyClaudeStyle
             cssHash = ComputeHash(css);
         }
 
+        public static Dictionary<string, object> ReadI18nExtra(string baseDir)
+        {
+            try
+            {
+                string extraPath = Path.Combine(baseDir, "i18n-extra.json");
+                if (!File.Exists(extraPath)) return null;
+                return MiniJson.ParseObject(File.ReadAllText(extraPath, Encoding.UTF8));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         public static string BuildConfigScriptExpression(string baseDir, PluginManifest manifest, string expectedCodeHash)
         {
             Dictionary<string, object> config = ReadConfig(baseDir, manifest);
@@ -601,6 +623,7 @@ namespace AgyClaudeStyle
             {
                 payload[kv.Key] = kv.Value;
             }
+            payload["i18nExtra"] = ReadI18nExtra(baseDir);
             payload["binding"] = manifest.SettingBinding;
             payload["codeHash"] = expected;
 
@@ -638,6 +661,7 @@ namespace AgyClaudeStyle
             {
                 initCfg[kv.Key] = kv.Value;
             }
+            initCfg["i18nExtra"] = ReadI18nExtra(baseDir);
             initCfg["binding"] = manifest.SettingBinding;
             initCfg["codeHash"] = codeHash;
 
@@ -817,7 +841,8 @@ namespace AgyClaudeStyle
                 string normDir = NormalizeWindowsPath(baseDir);
                 string exeName = !string.IsNullOrEmpty(exePath) ? Path.GetFileName(exePath) : Path.GetFileName(args[0]);
 
-                if (string.Equals(exeName, "agy-claude-style-watcher.exe", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(exeName, "agy-pet-watcher.exe", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(exeName, "agy-claude-style-watcher.exe", StringComparison.OrdinalIgnoreCase))
                 {
                     for (int i = 1; i < args.Count; i++)
                     {
@@ -1105,12 +1130,33 @@ namespace AgyClaudeStyle
             return activated;
         }
 
+        public static bool WakeExistingAntigravityWindow(string exePath)
+        {
+            string target = !string.IsNullOrEmpty(exePath) ? exePath : FindAntigravityExePath();
+            if (string.IsNullOrEmpty(target) || !File.Exists(target)) return false;
+            try
+            {
+                try { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null); } catch { }
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = target;
+                psi.WorkingDirectory = Path.GetDirectoryName(target);
+                psi.UseShellExecute = true;
+                Process.Start(psi);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static bool LaunchAntigravityWithCdp(string exePath, int port)
         {
             string target = !string.IsNullOrEmpty(exePath) ? exePath : FindAntigravityExePath();
             if (string.IsNullOrEmpty(target) || !File.Exists(target)) return false;
             try
             {
+                try { Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null); } catch { }
                 if (GetAntigravityProcessIds().Count == 0)
                 {
                     RemoveStalePortFile();
@@ -1119,7 +1165,8 @@ namespace AgyClaudeStyle
                 psi.FileName = target;
                 psi.Arguments = "--remote-debugging-port=" + Math.Max(0, port);
                 psi.WorkingDirectory = Path.GetDirectoryName(target);
-                psi.UseShellExecute = true;
+                psi.UseShellExecute = false;
+                try { psi.EnvironmentVariables.Remove("ELECTRON_RUN_AS_NODE"); } catch { }
                 Process.Start(psi);
                 return true;
             }

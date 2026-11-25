@@ -1,7 +1,7 @@
 {
-  "name": "agy-claude-style",
+  "name": "agy-pet",
   "version": "2.0.0",
-  "description": "AGY Claude Style — Claude Code / dsh-claude-style studio UI theme, interactive ASCII ripple field, usage dashboard, compact composer, and pixel crab mascot for Google Antigravity.",
+  "description": "AGY Pet — Transparent desktop pet, dock companion, Claude Code / Studio UI theme, Token HUD, 5-language i18n, and agy-fast accelerator for Google Antigravity.",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.mjs",

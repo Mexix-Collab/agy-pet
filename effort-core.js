@@ -129,6 +129,28 @@
   const DETENT = 0.8;
   const DRAG_THRESHOLD_PX = 3;
 
+  function normalizeEffortBadgeText(text) {
+    const raw = String(text || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (/\bmax\b/.test(raw)) return 'max';
+    if (/\bxhigh\b/.test(raw)) return 'xhigh';
+    if (/\bhigh\b/.test(raw)) return 'high';
+    if (/\bmed(?:ium)?\b/.test(raw)) return 'medium';
+    if (/\blow\b/.test(raw)) return 'low';
+    if (/\bextra\b/.test(raw)) return 'extra';
+    if (/\bminimal\b/.test(raw)) return 'minimal';
+    if (/\blight\b/.test(raw)) return 'light';
+    if (/^(?:极限|極限|极高|極高|最大|极限推理|極限推理|最大推論)$/.test(raw)) return 'max';
+    if (/^(?:超高|超强|超強|超强推理|超強推理|超高推論)$/.test(raw)) return 'xhigh';
+    if (/^(?:高|高推理|高推論)$/.test(raw)) return 'high';
+    if (/^(?:中|中等|中推理|中推論)$/.test(raw)) return 'medium';
+    if (/^(?:低|低推理|低推論)$/.test(raw)) return 'low';
+    if (/^(?:极低|極低|最低)$/.test(raw)) return 'minimal';
+    if (/^(?:轻|輕|轻度|輕度)$/.test(raw)) return 'light';
+    if (/^(?:额外|額外)$/.test(raw)) return 'extra';
+    return '';
+  }
+
   function parseModelLabelEffort(label) {
     const raw = String(label || '').trim();
     const m = raw.match(/^(.+?)\s*(?:\((None|Off|Minimal|Light|Low|Medium|High|Extra|XHigh|Max|Ultra)\)|\s+(None|Off|Minimal|Light|Low|Medium|High|Extra|XHigh|Max|Ultra))\s*$/i);
@@ -536,6 +558,7 @@
     };
 
     const flashFam = findFamily(/\bflash\b/i);
+    const neonFam = findFamily(/\bneon\b/i);
     const argonFam = findFamily(/\bargon\b/i);
     const hydroFam = findFamily(/\bhydrogen\b/i);
     const sonnetFam = findFamily(/\bsonnet\b/i);
@@ -551,17 +574,18 @@
         pickOption(opusFam, ['medium', 'high']),
         pickOption(opusFam, ['high', 'xhigh', 'max']),
       ].filter(Boolean);
-    } else if (/argon/i.test(curParsed.base) && flashFam && argonFam) {
+    } else if (/(?:argon|neon)/i.test(curParsed.base) && flashFam && (neonFam || argonFam)) {
+      const fastProFam = neonFam || argonFam;
       chosen = [
         pickOption(flashFam, ['low', 'medium']),
         pickOption(flashFam, ['medium', 'high']),
         pickOption(flashFam, ['high', 'xhigh']),
-        pickOption(argonFam, ['low', 'medium']),
-        pickOption(argonFam, ['medium', 'high']),
-        pickOption(argonFam, ['high', 'xhigh', 'max']),
+        pickOption(fastProFam, ['low', 'medium']),
+        pickOption(fastProFam, ['medium', 'high']),
+        pickOption(fastProFam, ['high', 'xhigh', 'max']),
       ].filter(Boolean);
-    } else if (flashFam && (hydroFam || argonFam)) {
-      const proFam = hydroFam || argonFam;
+    } else if (flashFam && (hydroFam || neonFam || argonFam)) {
+      const proFam = hydroFam || neonFam || argonFam;
       const proMidChoice =
         curParsed.base.toLowerCase() === proFam.base.toLowerCase() && curEffort === 'medium'
           ? ['medium', 'low']
@@ -923,6 +947,7 @@
     effortTierDesc,
     DETENT,
     DRAG_THRESHOLD_PX,
+    normalizeEffortBadgeText,
     parseModelLabelEffort,
     orderEffortSteps,
     resolveClaudeEffortSteps,

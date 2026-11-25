@@ -77,6 +77,7 @@
       delete cleanBase.binding;
       delete cleanBase.pollIntervalMs;
       delete cleanBase.codeHash;
+      delete cleanBase.i18nExtra;
       const baseJson = JSON.stringify(cleanBase);
       const prevBaseJson = localStorage.getItem(STORAGE_FILE_CFG_KEY);
       let saved = {};
@@ -206,6 +207,9 @@
     else html.removeAttribute('data-ag-cs-cjk');
 
     const prevLang = lastAppliedLang;
+    if (domTranslator && typeof domTranslator.setExtraLocales === 'function') {
+      domTranslator.setExtraLocales(runtimeInitConfig?.i18nExtra || null, document);
+    }
     if (lang !== prevLang) {
       lastAppliedLang = lang;
       if (typeof window !== 'undefined' && window.__agI18n && typeof window.__agI18n.revert === 'function') {
@@ -1489,6 +1493,8 @@
       sustainedPeakSpeed: 0,
       checkpointIdx: -1,
       compactedSteps: 0,
+      compactedAtTail: false,
+      checkpoints: [],
       truncationReason: 0,
       budgets: { customizationTokenBudget: 20000, rulesTokenBudget: 20000 },
       hasActiveLimits: false,
@@ -1657,6 +1663,240 @@
     }
   }
 
+  function findAgentInputBoxSubmitProps(scopeEl) {
+    const scopedBox =
+      scopeEl?.closest?.('[data-testid="agent-input-box"]') ||
+      document.querySelector('[data-testid="agent-input-box"]');
+    const ed = scopedBox?.querySelector?.('[contenteditable="true"]') || scopedBox;
+    if (!ed) return null;
+    try {
+      const fk = Object.keys(ed).find((k) => k.startsWith('__reactFiber$'));
+      let handleSubmit = null;
+      let slashCommandItems = null;
+      for (let f = fk && ed[fk], d = 0; f && d < 40; f = f.return, d++) {
+        const p = f.memoizedProps || f.pendingProps;
+        if (p && typeof p === 'object') {
+          if (!handleSubmit && typeof p.handleSubmit === 'function') {
+            handleSubmit = p.handleSubmit;
+          }
+          if (!slashCommandItems && Array.isArray(p.slashCommandItems)) {
+            slashCommandItems = p.slashCommandItems;
+          }
+          if (handleSubmit && slashCommandItems) break;
+        }
+      }
+      if (handleSubmit) return { handleSubmit, slashCommandItems, box: scopedBox, ed };
+    } catch {}
+    return null;
+  }
+
+  function triggerAutoCompact(scopeEl) {
+    // 1. Preferred path: invoke native AgentInputBox handleSubmit with exact /compact SlashCommandScopeItem
+    //    so it compacts immediately without clobbering any unsent user draft text in the editor.
+    const found = findAgentInputBoxSubmitProps(scopeEl);
+    if (found && typeof found.handleSubmit === 'function') {
+      try {
+        const matched = Array.isArray(found.slashCommandItems)
+          ? found.slashCommandItems.find(
+              (x) => String(x?.title || x?.name || x?.info?.name || '').toLowerCase() === 'compact'
+            )
+          : null;
+        const compactInfo = matched?.info || {
+          $typeName: 'exa.codeium_common_pb.SlashCommandInfo',
+          name: 'compact',
+          modelFacingText: '',
+          type: 1,
+          icon: 'collapse_all',
+          displayName: '',
+          logo: '',
+        };
+        const items = [
+          {
+            $typeName: 'exa.codeium_common_pb.TextOrScopeItem',
+            chunk: {
+              case: 'item',
+              value: {
+                $typeName: 'exa.codeium_common_pb.ContextScopeItem',
+                scopeItem: {
+                  case: 'slashCommand',
+                  value: {
+                    $typeName: 'exa.codeium_common_pb.SlashCommandScopeItem',
+                    argumentValues: {},
+                    info: compactInfo,
+                  },
+                },
+              },
+            },
+          },
+          {
+            $typeName: 'exa.codeium_common_pb.TextOrScopeItem',
+            chunk: { case: 'text', value: ' ' },
+          },
+        ];
+        const res = found.handleSubmit(items, [], () => {}, null);
+        if (res && typeof res.catch === 'function') res.catch(() => {});
+        markUserSubmitted();
+        return true;
+      } catch {}
+    }
+
+    // 2. Fallback path: fill /compact into composer, select slash option if shown, and submit via button/Enter
+    const filled = fillCompactCommand(scopeEl);
+    if (!filled) return false;
+    const scopedBox =
+      scopeEl?.closest?.('[data-testid="agent-input-box"]') ||
+      document.querySelector('[data-testid="agent-input-box"]');
+    const ed = scopedBox?.querySelector?.('[contenteditable="true"]');
+    const trySubmitDom = () => {
+      if (destroyed) return;
+      const box =
+        scopeEl?.closest?.('[data-testid="agent-input-box"]') ||
+        document.querySelector('[data-testid="agent-input-box"]');
+      const btns = box ? Array.from(box.querySelectorAll('button')) : [];
+      const sendBtn = btns.find((b) => {
+        if (b.disabled) return false;
+        const tid = String(b.getAttribute('data-testid') || '');
+        const bType = String(b.getAttribute('type') || '');
+        const aria = String(b.getAttribute('aria-label') || '');
+        return bType === 'submit' || /send|submit/i.test(tid) || /send|submit|发送|傳送|送信/i.test(aria);
+      });
+      if (sendBtn) {
+        sendBtn.click();
+        markUserSubmitted();
+        return;
+      }
+      if (ed && ed.isConnected) {
+        ed.focus();
+        ed.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true })
+        );
+        markUserSubmitted();
+      }
+    };
+    setTimeout(() => {
+      if (destroyed) return;
+      const opt = Array.from(document.querySelectorAll('[role="option"], [data-testid="slash-command-menu"] button')).find(
+        (el) => /\/?compact\b/i.test(String(el.textContent || ''))
+      );
+      if (opt && typeof opt.click === 'function') {
+        opt.click();
+        setTimeout(trySubmitDom, 120);
+      } else {
+        trySubmitDom();
+      }
+    }, 100);
+    return true;
+  }
+
+  function buildQuotaDisplayInfo(info, card) {
+    const zh = isZh();
+    const lang = getLang();
+    const tierTextsZh = [
+      '钱袋满溢！额度超级充裕，放心冲鸭✦',
+      '金袋叮当响~ 额度很健康，稳稳干活♪',
+      '钱袋如常，额度用到一半啦，节奏刚刚好~',
+      '数金皱眉… 额度有点紧了，省着点用喵！',
+      '袋空如洗！！额度告急，快要见底啦！',
+      '分文不剩了喵… 额度已被彻底用光(x_x)',
+    ];
+    const tierTextsEn = [
+      'Quota overflowing! Plenty left, full speed ahead ✦',
+      'Quota looks healthy~ steady coding ♪',
+      'Halfway through quota, nice steady pace~',
+      'Quota getting tight… spend wisely!',
+      'Quota running very low!! Almost empty!',
+      'Quota completely depleted (x_x)',
+    ];
+    const pickTier = (usedPct) => {
+      const p = Number.isFinite(usedPct) && usedPct >= 0 ? Math.max(0, Math.min(100, Math.round(usedPct))) : 25;
+      const idx = p >= 100 ? 5 : Math.floor(p / 20);
+      return {
+        tierIdx: idx,
+        tierText: (zh ? tierTextsZh : tierTextsEn)[idx] || (zh ? tierTextsZh[0] : tierTextsEn[0]),
+      };
+    };
+
+    const activeQuota =
+      getActiveQuotaForInfo(info, card) ||
+      (Array.isArray(cachedQuotaData?.groups) && cachedQuotaData.groups.length > 0 ? cachedQuotaData.groups[0] : null);
+    const fmtNum = (n) => (Math.abs(n - Math.round(n)) < 0.05 ? String(Math.round(n)) : n.toFixed(1));
+
+    if (activeQuota && typeof activeQuota.effectiveRemainingPct === 'number') {
+      const remPct = Math.max(0, Math.min(100, Number(activeQuota.effectiveRemainingPct)));
+      const usedPct = Math.max(0, Math.min(100, 100 - remPct));
+      const r5h = fmtBucketReset(activeQuota.b5h, lang);
+      const rWeek = fmtBucketReset(activeQuota.bWeek, lang);
+      const gName = activeQuota.groupName ? activeQuota.groupName.trim() : '';
+      const lines = [];
+      if (gName) lines.push(`【${gName}】`);
+      const b5h = activeQuota.b5h;
+      const bWeek = activeQuota.bWeek && activeQuota.bWeek !== b5h ? activeQuota.bWeek : null;
+      if (b5h && !b5h.disabled && typeof b5h.remainingPct === 'number') {
+        const rem5 = Math.max(0, Math.min(100, Number(b5h.remainingPct)));
+        const used5 = Math.max(0, Math.min(100, 100 - rem5));
+        lines.push(
+          zh
+            ? `5h额度：已用 ${fmtNum(used5)}% · 剩余 ${fmtNum(rem5)}%${r5h ? ` (${r5h})` : ''}`
+            : `5h Quota: Used ${fmtNum(used5)}% · Rem ${fmtNum(rem5)}%${r5h ? ` (${r5h})` : ''}`
+        );
+      }
+      if (bWeek && !bWeek.disabled && typeof bWeek.remainingPct === 'number') {
+        const remW = Math.max(0, Math.min(100, Number(bWeek.remainingPct)));
+        const usedW = Math.max(0, Math.min(100, 100 - remW));
+        lines.push(
+          zh
+            ? `周额度：已用 ${fmtNum(usedW)}% · 剩余 ${fmtNum(remW)}%${rWeek ? ` (${rWeek})` : ''}`
+            : `Weekly: Used ${fmtNum(usedW)}% · Rem ${fmtNum(remW)}%${rWeek ? ` (${rWeek})` : ''}`
+        );
+      }
+      if (lines.length <= (gName ? 1 : 0)) {
+        const rTxt = r5h || rWeek || '';
+        lines.push(
+          zh
+            ? `额度：已用 ${fmtNum(usedPct)}% · 剩余 ${fmtNum(remPct)}%${rTxt ? ` (${rTxt})` : ''}`
+            : `Quota: Used ${fmtNum(usedPct)}% · Rem ${fmtNum(remPct)}%${rTxt ? ` (${rTxt})` : ''}`
+        );
+      }
+      const { tierIdx, tierText } = pickTier(usedPct);
+      return {
+        hasQuota: true,
+        usedPct: Math.round(usedPct),
+        remPct: Math.round(remPct),
+        summary: lines.join('\n'),
+        tierIdx,
+        tierText,
+      };
+    }
+
+    const ctxMax = Number(info?.maxContextTokens || info?.contextMax || 0);
+    const ctxUsed = Number(info?.contextUsed || 0);
+    if (ctxMax > 0 && ctxUsed >= 0) {
+      const usedPct = Math.max(0, Math.min(100, (ctxUsed / ctxMax) * 100));
+      const remPct = Math.max(0, 100 - usedPct);
+      const { tierIdx, tierText } = pickTier(usedPct);
+      return {
+        hasQuota: false,
+        usedPct: Math.round(usedPct),
+        remPct: Math.round(remPct),
+        summary: zh
+          ? `【当前额度加载中】\n上下文：已用 ${Math.round(usedPct)}% · 剩余 ${Math.round(remPct)}%`
+          : `[Loading Quota]\nContext: Used ${Math.round(usedPct)}% · Rem ${Math.round(remPct)}%`,
+        tierIdx,
+        tierText,
+      };
+    }
+
+    const { tierIdx, tierText } = pickTier(0);
+    return {
+      hasQuota: false,
+      usedPct: -1,
+      remPct: 100,
+      summary: zh ? '【当前额度】\n正在获取最新额度用量…' : '[Quota]\nFetching latest quota usage…',
+      tierIdx,
+      tierText,
+    };
+  }
+
   function renderContextPopoverContent(pop, data, cascadeId) {
     const lang = getLang();
     const ui = uiText(lang);
@@ -1685,9 +1925,20 @@
       : '';
     const activeReset5h = fmtBucketReset(activeQuota?.b5h, lang);
     const activeResetWeek = fmtBucketReset(activeQuota?.bWeek, lang);
+    const has5hHero = Boolean(activeQuota?.b5h && !activeQuota.b5h.disabled && typeof activeQuota.b5h.remainingPct === 'number');
+    const hasWeekHero = Boolean(
+      activeQuota?.bWeek &&
+        activeQuota.bWeek !== activeQuota.b5h &&
+        !activeQuota.bWeek.disabled &&
+        typeof activeQuota.bWeek.remainingPct === 'number'
+    );
     const quotaBadgeHtml =
       activeQuota && typeof activeQuota.effectiveRemainingPct === 'number'
-        ? `<span class="ag-cs-ctx-quota-pill" style="color:${activeQuota.effectiveRemainingPct <= 10 ? '#dc3c3d' : activeQuota.effectiveRemainingPct <= 30 ? '#fbb315' : '#38bdf8'}">${escapeHtml(ui.quotaRemShort || 'Quota Rem')} ${activeQuota.effectiveRemainingPct.toFixed(1)}%${activeReset5h ? ' · ' + escapeHtml(activeReset5h) : activeResetWeek ? ' · ' + escapeHtml(activeResetWeek) : ''}</span>`
+        ? `<span class="ag-cs-ctx-quota-pill" style="color:${activeQuota.effectiveRemainingPct <= 10 ? '#dc3c3d' : activeQuota.effectiveRemainingPct <= 30 ? '#fbb315' : '#38bdf8'}">${
+            has5hHero && hasWeekHero
+              ? `5h ${escapeHtml(ui.remShort || 'Rem')} ${activeQuota.b5h.remainingPct.toFixed(1)}%${activeReset5h ? ' (' + escapeHtml(activeReset5h) + ')' : ''} · ${escapeHtml(ui.weeklyLabel || 'Weekly')} ${activeQuota.bWeek.remainingPct.toFixed(1)}%${activeResetWeek ? ' (' + escapeHtml(activeResetWeek) + ')' : ''}`
+              : `${escapeHtml(ui.quotaRemShort || 'Quota Rem')} ${activeQuota.effectiveRemainingPct.toFixed(1)}%${activeReset5h ? ' · ' + escapeHtml(activeReset5h) : activeResetWeek ? ' · ' + escapeHtml(activeResetWeek) : ''}`
+          }</span>`
         : '';
     const statusBadgeHtml = data?.isRunning
       ? `<span class="ag-cs-ctx-live-pill">${escapeHtml(data.isThinking ? ui.thinkingEllipsis || 'Thinking…' : ui.streamingEllipsis || 'Streaming…')}</span>`
@@ -1940,7 +2191,20 @@
                         </div>
                         <div class="ag-cs-ctx-quota-bar"><span style="width:${Math.max(0, Math.min(100, qPct)).toFixed(1)}%;background:${qCol}"></span></div>
                         <div class="ag-cs-ctx-quota-sub">
-                          <span>${g.b5h && !g.b5h.disabled ? `5h: ${g.b5h.remainingPct.toFixed(1)}% (${escapeHtml(r5h || '—')})` : g.bWeek ? `${escapeHtml(ui.weeklyLabel || 'Weekly')}: ${g.bWeek.remainingPct.toFixed(1)}% (${escapeHtml(rWeek || '—')})` : ''}</span>
+                          <span>${
+                            [
+                              g.b5h && !g.b5h.disabled && typeof g.b5h.remainingPct === 'number'
+                                ? `5h: ${g.b5h.remainingPct.toFixed(1)}% (${escapeHtml(r5h || '—')})`
+                                : '',
+                              g.bWeek && g.bWeek !== g.b5h && !g.bWeek.disabled && typeof g.bWeek.remainingPct === 'number'
+                                ? `${escapeHtml(ui.weeklyLabel || 'Weekly')}: ${g.bWeek.remainingPct.toFixed(1)}% (${escapeHtml(rWeek || '—')})`
+                                : !g.b5h && g.bWeek && typeof g.bWeek.remainingPct === 'number'
+                                ? `${escapeHtml(ui.weeklyLabel || 'Weekly')}: ${g.bWeek.remainingPct.toFixed(1)}% (${escapeHtml(rWeek || '—')})`
+                                : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')
+                          }</span>
                         </div>
                       </div>
                     `;
@@ -2029,18 +2293,6 @@
               ? usageCore.buildTelemetryReport(safeData, draftEst, cachedQuotaData, activeQuota, curLang)
               : JSON.stringify(safeData || {}, null, 2);
 
-          const writeClipboard = async () => {
-            if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
-              return false;
-            }
-            try {
-              await navigator.clipboard.writeText(textPayload);
-              return true;
-            } catch {
-              return false;
-            }
-          };
-
           const setFeedback = (label, stateKind) => {
             if (!btn.isConnected) return;
             clearTimeout(btn._agCsFeedbackTimer);
@@ -2054,7 +2306,7 @@
             }, 1400);
           };
 
-          writeClipboard().then((clipOk) => {
+          writeTextToClipboard(textPayload).then((clipOk) => {
             setFeedback(
               clipOk ? curUi.copiedBtnLabel || '✓ Copied' : curUi.actionFailedLabel || '✕ Failed',
               clipOk ? 'ok' : 'error'
@@ -2147,6 +2399,29 @@
 
   let lastUserSubmitAt = 0;
 
+  function unwrapTrajSummary(entry) {
+    if (!entry || typeof entry !== 'object') return {};
+    return entry.summary && typeof entry.summary === 'object' ? entry.summary : entry;
+  }
+
+  function isSummaryRunning(s) {
+    if (!s || typeof s !== 'object') return false;
+    if (
+      s.notFullyIdle ||
+      s.hasRunningSubagents ||
+      Number(s.activeSubagentCount || 0) > 0 ||
+      Number(s.backgroundTaskCount || 0) > 0
+    ) {
+      return true;
+    }
+    if (s.status === 2) return true;
+    if (typeof s.status === 'string') {
+      const u = s.status.toUpperCase();
+      if (u.includes('RUNNING')) return true;
+    }
+    return false;
+  }
+
   function getDomConvoSignal(cascadeId) {
     let cv = null;
     if (cascadeId) {
@@ -2223,7 +2498,7 @@
     const rawFallback = st.cascadeTrajectorySummaries || {};
     const allSummaries = { ...rawFallback, ...rawPrimary };
     const sumEntry = rawPrimary[cascadeId] || rawFallback[cascadeId] || allSummaries[cascadeId];
-    const sum = sumEntry?.summary || sumEntry || {};
+    const sum = unwrapTrajSummary(sumEntry);
     const isCloud = Boolean(sum?.cloud === true || cloudOnlyCascadeIds.has(cascadeId));
     const liveState = liveProv ? liveProv.getState?.() || null : null;
     if (liveProv && isCloud) {
@@ -2245,10 +2520,7 @@
     );
     const { domSig, domRunning } = getDomConvoSignal(cascadeId);
     const running = !!(
-      sum?.notFullyIdle ||
-      sum?.hasActivity ||
-      sum?.status === 2 ||
-      sum?.hasRunningSubagents ||
+      isSummaryRunning(sum) ||
       liveState?.status === 2 ||
       (liveState && liveState.fullyIdle === false) ||
       domRunning
@@ -2258,7 +2530,7 @@
     const childMetaList = [];
     for (const [subId, rawEntry] of Object.entries(allSummaries)) {
       if (subId === cascadeId) continue;
-      const s = rawEntry?.summary || rawEntry || {};
+      const s = unwrapTrajSummary(rawEntry);
       const meta = s.trajectoryMetadata || {};
       if (meta.parentConversationId === cascadeId || meta.rootConversationId === cascadeId) {
         childMetaList.push({
@@ -2268,7 +2540,7 @@
           summary: s.summary || '',
           summaryObj: s,
           stepCount: Number(s.stepCount || 0),
-          status: Number(s.status || 1),
+          status: isSummaryRunning(s) ? 2 : Number(s.status || 1),
           createdAt: meta.createdAt || s.createdTime,
         });
       }
@@ -2316,8 +2588,9 @@
     }
 
     const recentlySubmitted = now - lastUserSubmitAt < 12000;
-    const isHot = running || Boolean(entry.data?.isRunning) || recentlySubmitted;
-    const ttlMs = isHot ? 1000 : document.hidden ? 15000 : 3500;
+    const isHot = running || Boolean(entry.data?.isRunning) || Boolean(crabState?.wasRunning) || recentlySubmitted;
+    const hasDesktopPet = cfg.desktopPet !== false && typeof window.__agCsNekoBinding === 'function';
+    const ttlMs = isHot ? 700 : document.hidden ? (hasDesktopPet ? 1200 : 15000) : 3500;
     if (!force && !changed && entry.data && now - entry.lastAt < ttlMs) {
       return entry.data;
     }
@@ -2391,6 +2664,26 @@
           usageCore.attachSubagentSummaries(analyzed, subItems);
         }
 
+        if (analyzed) {
+          const subRunning = Array.isArray(analyzed.subagents) && analyzed.subagents.some((s) => s.isRunning);
+          const hasPendingBg = Boolean(
+            Number(analyzed.pendingBgTasks || 0) > 0 ||
+              Number(sum?.backgroundTaskCount || 0) > 0
+          );
+          if (hasPendingBg) {
+            analyzed.pendingBgTasks = Math.max(1, Number(analyzed.pendingBgTasks || 0));
+          }
+          if (running || subRunning || hasPendingBg) {
+            analyzed.isRunning = true;
+            const hasLiveToolStep = Boolean(analyzed.recentSteps?.some((s) => s.status === 1 || s.status === 2));
+            if (hasPendingBg && !analyzed.isThinking && !hasLiveToolStep) {
+              analyzed.isBackgroundSuspended = true;
+            } else if (!analyzed.isThinking && running && !hasLiveToolStep && !subRunning) {
+              analyzed.isThinking = true;
+            }
+          }
+        }
+
         entry.data = analyzed;
         entry.lastStep = stepCount;
         entry.lastMod = lastMod;
@@ -2413,15 +2706,1023 @@
     return entry.promise;
   }
 
-  // ── Pixel Crab Mascot Player ───────────────────────────────────────────
+  // ── Gemini Chibi Neko Mascot Player (dsh-pet inspired physics + multi-pose) ──
+  const NEKO_W = 86;
+  const NEKO_H = 108;
+  const NEKO_PEEK_W = 94;
+  const NEKO_PEEK_H = 74;
+  const NEKO_DOCK_VID_W = 98;
+  const NEKO_DOCK_VID_H = 77;
+  const NEKO_MEME_W = 92;
+  const NEKO_MEME_H = 92;
+  const dockVideoBlobCache = Object.create(null);
+
+  const NEKO_DOCK_ALIASES = {
+    idle: 'lie_idle',
+    watch_typing: 'lie_watch_typing',
+    think: 'lie_think',
+    thinking: 'lie_think',
+    coding: 'lie_coding',
+    typing: 'lie_coding',
+    background: 'sit_background',
+    happy: 'sit_happy',
+    shy: 'lie_peek_shy',
+    paws: 'lie_peek_shy',
+    error: 'sit_angry_pout',
+    sleep: 'lie_sleep',
+    sleeping: 'lie_sleep',
+  };
+
+  const NEKO_DOCK_IDLE_POOL = [
+    'lie_idle',
+    'lie_kick_feet',
+    'lie_star_play',
+    'lie_pat_edge',
+    'lie_yawn',
+    'sit_idle',
+    'sit_milk_tea',
+    'sit_snack',
+    'sit_read_notes',
+    'sit_music',
+    'sit_stretch',
+    'sit_wave_hi',
+  ];
+
+  const NEKO_DOCK_CATALOG = [
+    { key: 'lie_idle', stance: 'lie', zh: '🎀 趴框待机 · 呼吸晃耳', en: '🎀 Lie · Idle & Ears' },
+    { key: 'lie_watch_typing', stance: 'lie', zh: '👀 趴框盯打字 · 扫视光标', en: '👀 Lie · Watch Typing' },
+    { key: 'lie_think', stance: 'lie', zh: '✦ 趴框思考 · 灵光一闪', en: '✦ Lie · Deep Thinking' },
+    { key: 'lie_coding', stance: 'lie', zh: '💻 趴框敲代码 · 迷你键盘', en: '💻 Lie · Mini Keyboard' },
+    { key: 'lie_sleep', stance: 'lie', zh: '💤 趴框打盹 · 枕臂安睡', en: '💤 Lie · Nap Loop' },
+    { key: 'lie_yawn', stance: 'lie', zh: '🥱 趴框犯困 · 打哈欠揉眼', en: '🥱 Lie · Yawn & Rub Eyes' },
+    { key: 'lie_kick_feet', stance: 'lie', zh: '🐾 趴框晃小脚 · 开心摇尾', en: '🐾 Lie · Kick Feet' },
+    { key: 'lie_peek_shy', stance: 'lie', zh: '😳 趴框戳脸 · 害羞飞机耳', en: '😳 Lie · Shy Blush' },
+    { key: 'lie_star_play', stance: 'lie', zh: '⭐ 趴框拨弄 · 拍悬浮蓝星', en: '⭐ Lie · Play Star' },
+    { key: 'lie_pat_edge', stance: 'lie', zh: '🫶 趴框拍框沿 · 卖萌催促', en: '🫶 Lie · Pat Edge' },
+    { key: 'sit_idle', stance: 'sit', zh: '🌸 坐姿待机 · 乖巧摇尾巴', en: '🌸 Sit · Idle Sway' },
+    { key: 'sit_happy', stance: 'sit', zh: '🎉 坐姿庆祝 · 比耶冒爱心', en: '🎉 Sit · Happy Peace' },
+    { key: 'sit_background', stance: 'sit', zh: '🔭 坐姿守候 · 搭眉远眺', en: '🔭 Sit · Lookout' },
+    { key: 'sit_milk_tea', stance: 'sit', zh: '🧋 坐姿喝奶茶 · 满足吨吨', en: '🧋 Sit · Milk Tea' },
+    { key: 'sit_snack', stance: 'sit', zh: '🍡 坐姿吃团子 · 鼓腮咀嚼', en: '🍡 Sit · Eat Dango' },
+    { key: 'sit_read_notes', stance: 'sit', zh: '📖 坐姿翻本本 · 核对点头', en: '📖 Sit · Read Notes' },
+    { key: 'sit_music', stance: 'sit', zh: '🎧 坐姿听音乐 · 戴耳机轻晃', en: '🎧 Sit · Listen Music' },
+    { key: 'sit_angry_pout', stance: 'sit', zh: '😤 坐姿小傲娇 · 鼓嘴抱臂', en: '😤 Sit · Pout & Cross Arms' },
+    { key: 'sit_stretch', stance: 'sit', zh: '🌤️ 坐姿伸懒腰 · 舒展回神', en: '🌤️ Sit · Stretch' },
+    { key: 'sit_wave_hi', stance: 'sit', zh: '👋 坐姿挥挥手 · 元气招手', en: '👋 Sit · Wave Hi' },
+  ];
+
+  function canonicalDockVideoKey(vidKey) {
+    const vids = crabAssets.NEKO_DOCK_VIDEOS;
+    if (!vids || !vidKey) return 'lie_idle';
+    if (vids[vidKey]) return vidKey;
+    const mapped = NEKO_DOCK_ALIASES[vidKey];
+    if (mapped && vids[mapped]) return mapped;
+    return vids.lie_idle ? 'lie_idle' : vids.idle ? 'idle' : '';
+  }
+
+  function getDockVideoSrc(vidKey) {
+    const vids = crabAssets.NEKO_DOCK_VIDEOS;
+    const resolved = canonicalDockVideoKey(vidKey);
+    if (!vids || !resolved || !vids[resolved]) return '';
+    if (dockVideoBlobCache[resolved]) return dockVideoBlobCache[resolved];
+    const dataUri = vids[resolved];
+    try {
+      if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && typeof Blob === 'function' && typeof atob === 'function') {
+        const comma = dataUri.indexOf(',');
+        if (comma > 0) {
+          const bin = atob(dataUri.slice(comma + 1));
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }));
+          dockVideoBlobCache[resolved] = blobUrl;
+          return blobUrl;
+        }
+      }
+    } catch {}
+    return dataUri;
+  }
+  const NEKO_SNACK_KEYS = ['onigiri', 'icecream', 'dumpling', 'rice', 'just_one_bowl'];
+  const NEKO_IDLE_MEME_KEYS = ['onigiri', 'icecream', 'dumpling', 'paws', 'cute', 'crab'];
+  const NEKO_GRAVITY = 1400;
+  const NEKO_RESTITUTION = 0.78;
+  const NEKO_FRICTION = 2.5;
+  const NEKO_DEAD_SPEED = 420;
+  const NEKO_MAX_THROW = 2600;
+  const NEKO_SQ_MS = 220;
+
   let crabState = {
     root: null,
     sprite: null,
     strip: null,
+    img: null,
+    video: null,
+    bubble: null,
+    compactPrompt: null,
+    taskPanel: null,
+    taskExpanded: false,
+    taskDoneState: '', // '' | 'done' | 'error'
+    taskStartedAt: 0,
+    idleConfirmSince: 0,
+    idleConfirmTimer: null,
+    lastTaskElapsedSec: 0,
+    lastTelemetryJson: '',
+    lastInfo: null,
+    bubbleTimer: null,
+    bubbleVariant: '',
+    bubbleProtectedUntil: 0,
+    bubbleHovered: false,
+    quotaAnimKey: '',
+    quotaAnimUntil: 0,
+    quotaAnimTimer: null,
+    compactDismissedMap: new Map(), // cascadeId -> pct when dismissed
+    compactSendingCid: '',
+    compactSendingUntil: 0,
+    lastCtxPctByCid: new Map(),
+    lastCompactedStepsByCid: new Map(),
+    lastWaitingAlertCid: '',
+    lastWaitingAlertAt: 0,
+    chatterTimer: null,
+    menuEl: null,
     stage: mascotCore.freshStage(Date.now()),
     wasRunning: false,
     anchor: null,
+    forcedMood: '',    // '' | 'thinking' | 'coding' | 'ciallo' | 'happy' | 'paws' | 'snack' | 'burn_token' | 'sleeping'
+    bubbleEnabled: true,
+    roamEnabled: false,
+    facing: 1,         // 1 | -1
+    floating: false,
+    fx: 0,
+    fy: 0,
+    vx: 0,
+    vy: 0,
+    throwing: false,
+    throwRaf: 0,
+    squashRaf: 0,
+    squashUntil: 0,
+    trail: [],
+    roamOffset: 0,
+    roamTarget: 0,
+    roamTimer: null,
+    lastBubbleAt: 0,
+    idleMemeKey: 'onigiri',
+    snackIdx: 0,
+    userTypingUntil: 0,
+    userTypingTimer: null,
+    idleDockKey: 'lie_idle',
+    idleDockTimer: null,
+    curBoxMode: 'peek',
   };
+  crabState.poseMode = 'peek';
+
+  function nekoSquashScale(u, squash = 0.55) {
+    if (u < 0.45) {
+      const p = u / 0.45;
+      return 1 - (1 - squash) * p * p;
+    }
+    const p = (u - 0.45) / 0.55;
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    const f = 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+    return Math.min(1.12, squash + (1 - squash) * Math.max(f, 0));
+  }
+
+  function triggerNekoSquash(squash = 0.58) {
+    if (!crabState.strip || typeof requestAnimationFrame !== 'function' || motionReduced()) return;
+    if (crabState.squashRaf) cancelAnimationFrame(crabState.squashRaf);
+    const start = performance.now();
+    const step = (now) => {
+      if (destroyed || !crabState.strip) return;
+      const u = Math.min(1, (now - start) / NEKO_SQ_MS);
+      const sy = nekoSquashScale(u, squash);
+      const sx = 1 / Math.sqrt(Math.max(0.4, sy));
+      const faceScale = crabState.facing < 0 ? -1 : 1;
+      crabState.strip.style.transform = `scale(${(sx * faceScale).toFixed(4)}, ${sy.toFixed(4)})`;
+      if (u < 1) {
+        crabState.squashRaf = requestAnimationFrame(step);
+      } else {
+        crabState.squashRaf = 0;
+        crabState.strip.style.transform = faceScale < 0 ? 'scaleX(-1)' : '';
+      }
+    };
+    crabState.squashRaf = requestAnimationFrame(step);
+  }
+
+  function resolveNekoMood(animKey) {
+    if (crabState.forcedMood) return crabState.forcedMood;
+    switch (animKey) {
+      case 'thinking':
+        return 'thinking';
+      case 'typing':
+      case 'building':
+      case 'conducting':
+        return 'typing';
+      case 'happy':
+      case 'music':
+        return 'happy';
+      case 'tickle':
+        return 'tickle';
+      case 'poke-left':
+        return 'poke-left';
+      case 'poke-right':
+        return 'poke-right';
+      case 'error':
+      case 'notification':
+        return 'error';
+      case 'sleeping':
+        return 'sleeping';
+      case 'waking':
+        return 'waking';
+      case 'drag':
+        return 'drag';
+      case 'idle-look':
+        return 'idle-look';
+      case 'idle-wave':
+        return 'idle-wave';
+      case 'idle-laptop':
+        return 'idle-laptop';
+      default:
+        return 'idle';
+    }
+  }
+
+  function resolveNekoDockVideoKey(mood, info) {
+    const fm = crabState.forcedMood;
+    if (fm) {
+      return canonicalDockVideoKey(fm);
+    }
+    const now = Date.now();
+    if (crabState.quotaAnimKey && crabState.quotaAnimUntil > now) {
+      return canonicalDockVideoKey(crabState.quotaAnimKey);
+    }
+    if (mood === 'error') {
+      return canonicalDockVideoKey('sit_angry_pout');
+    }
+    if (
+      mood === 'poke-left' ||
+      mood === 'poke-right' ||
+      mood === 'tickle' ||
+      mood === 'drag'
+    ) {
+      return canonicalDockVideoKey('lie_peek_shy');
+    }
+    if (crabState.userTypingUntil > now) {
+      return canonicalDockVideoKey('lie_watch_typing');
+    }
+    if (info?.isRunning) {
+      if (info.isWaiting) return canonicalDockVideoKey('lie_pat_edge');
+      const hasLiveTool = Array.isArray(info.recentSteps) && info.recentSteps.some((s) => s.status === 1 || s.status === 2);
+      const subRunning = Array.isArray(info.subagents) && info.subagents.some((s) => s.isRunning);
+      const isBgWait = Boolean(Number(info.pendingBgTasks || 0) > 0 || info.isBackgroundSuspended || subRunning);
+      if (isBgWait && !hasLiveTool) return canonicalDockVideoKey('sit_background');
+      if (info.isThinking || mood === 'thinking') return canonicalDockVideoKey('lie_think');
+      return canonicalDockVideoKey('lie_coding');
+    }
+    if (mood === 'thinking') return canonicalDockVideoKey('lie_think');
+    if (mood === 'typing' || mood === 'coding') return canonicalDockVideoKey('lie_coding');
+    if (mood === 'happy') return canonicalDockVideoKey('sit_happy');
+    if (mood === 'idle-wave') return canonicalDockVideoKey('sit_wave_hi');
+    if (mood === 'sleeping') return canonicalDockVideoKey('lie_sleep');
+    if (mood === 'waking') return canonicalDockVideoKey('sit_stretch');
+    if (mood === 'idle-look') return canonicalDockVideoKey('sit_background');
+    if (mood === 'idle-laptop') return canonicalDockVideoKey('sit_read_notes');
+    return canonicalDockVideoKey(crabState.idleDockKey || 'lie_idle');
+  }
+
+  function scheduleIdleDockRotation() {
+    if (crabState.idleDockTimer) clearTimeout(crabState.idleDockTimer);
+    if (destroyed || !crabState.root) return;
+    const delayMs = 13000 + Math.floor(Math.random() * 9000);
+    crabState.idleDockTimer = setTimeout(() => {
+      crabState.idleDockTimer = null;
+      if (destroyed || !crabState.root || !crabState.video) return;
+      const curMood = crabState.root.getAttribute('data-ag-cs-mood') || 'idle';
+      const isIdleNow =
+        !crabState.forcedMood &&
+        !crabState.lastInfo?.isRunning &&
+        crabState.userTypingUntil <= Date.now() &&
+        (curMood === 'idle' || curMood === 'idle-look' || curMood === 'idle-wave' || curMood === 'idle-laptop');
+      if (isIdleNow && !document.hidden) {
+        // Alternate gently between relaxing lie_idle and rich playful lie/sit dock clips
+        if (crabState.idleDockKey !== 'lie_idle' && Math.random() < 0.35) {
+          crabState.idleDockKey = 'lie_idle';
+        } else {
+          const choices = NEKO_DOCK_IDLE_POOL.filter((k) => k !== crabState.idleDockKey);
+          crabState.idleDockKey = choices[Math.floor(Math.random() * choices.length)] || 'lie_idle';
+        }
+        syncNekoDockVideo(curMood);
+      }
+      scheduleIdleDockRotation();
+    }, delayMs);
+  }
+
+  function syncNekoDockVideo(mood) {
+    if (!crabState.root || !crabState.video) return false;
+    const vids = crabAssets.NEKO_DOCK_VIDEOS;
+    if (!vids || typeof vids !== 'object') return false;
+    const curMood = mood || crabState.root.getAttribute('data-ag-cs-mood') || 'idle';
+    const vidKey = resolveNekoDockVideoKey(curMood, crabState.lastInfo);
+    const src = getDockVideoSrc(vidKey) || getDockVideoSrc('lie_idle');
+    if (!src) return false;
+    const stance = vidKey.startsWith('sit_') ? 'sit' : 'lie';
+    crabState.curBoxMode = 'dock-video';
+    crabState.root.setAttribute('data-ag-cs-has-video', '1');
+    crabState.root.setAttribute('data-ag-cs-video', vidKey);
+    crabState.root.setAttribute('data-ag-cs-dock-stance', stance);
+    if (crabState.video.getAttribute('data-vid-key') !== vidKey) {
+      crabState.video.setAttribute('data-vid-key', vidKey);
+      crabState.video.src = src;
+      try {
+        const p = crabState.video.play?.();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch {}
+    }
+    return true;
+  }
+
+  function resolveNekoVisual(mood) {
+    const poses = crabAssets.NEKO_POSES || {};
+    const pickPose = (k, box = 'chibi') => ({
+      key: k,
+      src: poses[k] || poses.idle || crabAssets.NEKO_DATA_URI,
+      boxMode: box,
+    });
+    if (crabState.poseMode === 'peek' && !crabState.floating && poses.peek) {
+      return pickPose('peek', 'peek');
+    }
+    switch (mood) {
+      case 'thinking':
+      case 'think':
+        return pickPose('think');
+      case 'typing':
+      case 'coding':
+      case 'ciallo':
+      case 'idle-wave':
+        return pickPose('wave');
+      case 'happy':
+      case 'snack':
+      case 'idle-laptop':
+      case 'burn_token':
+        return pickPose('happy');
+      case 'sleeping':
+      case 'sleep':
+      case 'waking':
+        return pickPose('sleep');
+      case 'paws':
+      case 'error':
+      case 'tickle':
+      case 'poke-left':
+      case 'poke-right':
+      case 'drag':
+        return pickPose('shy');
+      default:
+        return pickPose('idle');
+    }
+  }
+
+  function getNekoLine(kind) {
+    const zh = isZh();
+    const ja = getLang() === 'ja';
+    const bank = {
+      thinking: zh
+        ? ['正在认真思考喵~ ✦', '推演思路中…稍等哦', '大脑高速运转中喵 ✦']
+        : ja
+        ? ['考え中にゃ~ ✦', 'じっくり推論中…']
+        : ['Thinking carefully~ ✦', 'Connecting the stars...'],
+      typing: zh
+        ? ['哒哒哒~努力写代码中！', '正在全速干活喵♪', '全息键盘冒火星啦~']
+        : ja
+        ? ['カタカタ作業中にゃ♪', 'コード書いてるにゃ！']
+        : ['Typing away~ ♪', 'Writing code fast!'],
+      watch_typing: zh
+        ? ['我看看你在写什么好玩的喵~ 👀', '认真盯光标中…随时准备出发 ✦']
+        : ja
+        ? ['何を入力してるのかにゃ~ 👀']
+        : ['Watching you type~ 👀'],
+      background: zh
+        ? ['正在帮你盯着后台任务动静喵~', '左右巡视中，后台有消息我马上喊你 ✦']
+        : ja
+        ? ['バックグラウンドを見守り中にゃ~']
+        : ['Keeping an eye on background tasks~'],
+      ciallo: zh
+        ? ['Ciallo～(∠・ω< )⌒★', '嗨嗨~随时待命喵 ✦']
+        : ja
+        ? ['Ciallo～(∠・ω< )⌒★']
+        : ['Ciallo~(∠・ω< )⌒★'],
+      snack: zh
+        ? ['干饭时间到~再来一碗喵！🍙', '偷偷吃口小饭团补充能量~', '吃饱饱才有力气写代码喵♪']
+        : ja
+        ? ['おにぎりもぐもぐにゃ~ 🍙']
+        : ['Snack break~ nom nom 🍙'],
+      burn_token: zh
+        ? ['芜湖~ Token 燃烧起来啦！🔥', '算力全开，大的要来了喵！']
+        : ja
+        ? ['トークン燃焼中にゃ！🔥']
+        : ['Burning tokens at full speed! 🔥'],
+      happy: zh
+        ? ['好耶！搞定啦喵~ ♪', '大功告成！夸夸我~', '任务完成 ✦ 超级顺利！']
+        : ja
+        ? ['できたにゃ~ ♪', '任務完了！ほめてほめて~']
+        : ['All done~ ♪', 'Yay! Mission complete! ✦'],
+      error: zh
+        ? ['呜哇！好像有点不对劲…', '出错了喵，让我看看！']
+        : ja
+        ? ['うわっ！エラーかにゃ…']
+        : ['Whoa! Something went wrong...'],
+      poke: zh
+        ? ['喵呜？戳我干嘛呀~', '别戳脸蛋啦会红的！', '在的在的，随时待命喵 ✦']
+        : ja
+        ? ['にゃっ？つつかないで~', 'ここにいるにゃ ✦']
+        : ['Meow? Why poke me~', 'Always ready! ✦'],
+      tickle: zh
+        ? ['呀啊~好痒好痒别挠啦！(≧▽≦)', '哈哈哈投降啦喵~']
+        : ja
+        ? ['きゃっくすぐったいにゃ！(≧▽≦)']
+        : ['Hahaha stop tickling me~ (≧▽≦)'],
+      throw: zh
+        ? ['呜哇要飞起来啦——！', '飞高高喵——！']
+        : ja
+        ? ['うわぁ飛んじゃうにゃ——！']
+        : ['Wheee I am flying~!!'],
+      sleep: zh
+        ? ['呼呼…zzZ…小鱼干…', '抱紧大尾巴睡香香…']
+        : ja
+        ? ['すやすや…zzZ…']
+        : ['Zzz… dreaming of stars…'],
+      waiting: zh
+        ? ['在等你确认喵~ 快看看对话框 👀', '有操作等你点头哦 ✦']
+        : ja
+        ? ['確認待ちにゃ~ 👀']
+        : ['Waiting for your approval~ 👀'],
+      subagent: zh
+        ? ['子代理小分队正在并行干活喵~ 🔭', '我帮你盯着分身们的进度 ✦']
+        : ja
+        ? ['サブエージェントが作業中にゃ~ 🔭']
+        : ['Subagents are working in parallel~ 🔭'],
+      compacted: zh
+        ? ['压缩完成啦！上下文瞬间清爽喵~ ♪', '记忆瘦身成功 ✦ 继续轻装冲鸭！']
+        : ja
+        ? ['圧縮完了！コンテキストすっきりにゃ~ ♪']
+        : ['Compacted! Context window is fresh again~ ♪'],
+      chatter: zh
+        ? [
+            '写代码辛苦啦，记得喝口水喵~',
+            '今天也要元气满满哦 ✦',
+            '双击我可以看看当前额度用量哦~',
+            '右键我可以切换超多动作哦~',
+          ]
+        : ja
+        ? [
+            'お疲れさまにゃ、お水飲んでね~',
+            '今日も一日がんばろうにゃ ✦',
+            'ダブルクリックで枠の残りが見られるにゃ♪',
+          ]
+        : [
+            'Stay hydrated while coding~',
+            'Let’s shine today ✦',
+            'Double-click me to check quota usage~',
+          ],
+    };
+    const arr = bank[kind] || bank.chatter;
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function hideNekoBubble() {
+    if (crabState.bubbleTimer) {
+      clearTimeout(crabState.bubbleTimer);
+      crabState.bubbleTimer = null;
+    }
+    crabState.bubbleVariant = '';
+    crabState.bubbleProtectedUntil = 0;
+    crabState.bubbleHovered = false;
+    if (crabState.bubble) {
+      crabState.bubble.removeAttribute('data-open');
+      crabState.bubble.removeAttribute('data-variant');
+    }
+  }
+
+  function showNekoBubble(text, ms = 3200, opts = null) {
+    if (destroyed || !crabState.bubble || !text) return;
+    const force = Boolean(opts && opts.force);
+    const variant = (opts && opts.variant) || '';
+    const now = Date.now();
+    if (!force && !crabState.bubbleEnabled) return;
+    if (!force && crabState.bubbleProtectedUntil > now) return;
+
+    crabState.bubble.textContent = text;
+    if (variant) crabState.bubble.setAttribute('data-variant', variant);
+    else crabState.bubble.removeAttribute('data-variant');
+    crabState.bubble.setAttribute('data-open', '1');
+    crabState.bubbleVariant = variant;
+    crabState.lastBubbleAt = now;
+    if (force && opts && opts.protectMs) {
+      crabState.bubbleProtectedUntil = now + Number(opts.protectMs);
+    } else if (!force) {
+      crabState.bubbleProtectedUntil = 0;
+    }
+    if (crabState.bubbleTimer) clearTimeout(crabState.bubbleTimer);
+    crabState.bubbleTimer = setTimeout(() => {
+      crabState.bubbleTimer = null;
+      if (crabState.bubbleHovered) return;
+      hideNekoBubble();
+    }, ms);
+  }
+
+  function showNekoQuotaBubble() {
+    if (destroyed || !crabState.root) return;
+    const q = buildQuotaDisplayInfo(crabState.lastInfo, crabState.anchor);
+    const renderQuotaCard = (infoObj) => {
+      const head = infoObj.summary.startsWith('【') || infoObj.summary.startsWith('[')
+        ? infoObj.summary
+        : `【${infoObj.summary}】`;
+      showNekoBubble(`${head}\n${infoObj.tierText}`, 6800, {
+        force: true,
+        variant: 'quota',
+        protectMs: 5200,
+      });
+    };
+
+    // Map quota tier to matching dock video animation (mirrors desktop pet tiers)
+    const tierAnimMap = ['happy', 'happy', 'idle', 'think', 'shy', 'sleep'];
+    const vidKey = tierAnimMap[q.tierIdx] || 'happy';
+    crabState.forcedMood = '';
+    crabState.stage.asleep = false;
+    crabState.stage.clicks = [];
+    crabState.stage.reaction = null;
+    crabState.quotaAnimKey = vidKey;
+    crabState.quotaAnimUntil = Date.now() + 5000;
+    if (crabState.quotaAnimTimer) clearTimeout(crabState.quotaAnimTimer);
+    crabState.quotaAnimTimer = setTimeout(() => {
+      crabState.quotaAnimTimer = null;
+      crabState.quotaAnimKey = '';
+      crabState.quotaAnimUntil = 0;
+      if (!destroyed && crabState.root && crabState.video) {
+        syncNekoDockVideo(crabState.root.getAttribute('data-ag-cs-mood') || 'idle');
+      }
+    }, 5100);
+
+    triggerNekoSquash(0.72);
+    syncNekoDockVideo(crabState.root.getAttribute('data-ag-cs-mood') || 'idle');
+    renderQuotaCard(q);
+
+    // Refresh quota data in background if missing or older than 30s, then update open bubble in place
+    if (!cachedQuotaData || Date.now() - lastQuotaFetchAt > 30000) {
+      fetchQuotaData(false)
+        .then(() => {
+          if (destroyed || !crabState.bubble) return;
+          if (crabState.bubble.getAttribute('data-open') === '1' && crabState.bubbleVariant === 'quota') {
+            const freshQ = buildQuotaDisplayInfo(crabState.lastInfo, crabState.anchor);
+            renderQuotaCard(freshQ);
+          }
+          syncNekoToDesktop(crabState.lastInfo, false);
+        })
+        .catch(() => {});
+    }
+  }
+
+  function renderNekoCompactPrompt(activeCard, info) {
+    if (!crabState.compactPrompt || !activeCard) return;
+    const el = crabState.compactPrompt;
+    const isHomeCard = Boolean(activeCard.closest?.('.agy-home') && !activeCard.closest?.('[data-testid="conversation-view"]'));
+    const cid = isHomeCard ? '' : (info?.cascadeId || crabState.activeCascadeId || '');
+    if (isHomeCard || !cid) {
+      el.removeAttribute('data-open');
+      el.removeAttribute('data-level');
+      el.removeAttribute('data-render-key');
+      return;
+    }
+
+    const { ring } = getRingTelemetryForCard(activeCard, info);
+    const hasUsage = Boolean((info?.calls || 0) > 0 || ring.usedTokens > 0);
+    const usedPct = hasUsage ? Math.max(0, Math.min(100, Number(ring.contextUsedPct || 0))) : 0;
+    const usedPctRound = Math.round(usedPct);
+    const now = Date.now();
+    const prevPct = crabState.lastCtxPctByCid.get(cid) || 0;
+    const curCompactedSteps = Number(info?.compactedSteps || 0);
+    const prevCompactedSteps = crabState.lastCompactedStepsByCid.get(cid);
+
+    // Detect compaction finished -> clear sending/dismissed state & celebrate!
+    const compactedJustNow =
+      (prevCompactedSteps != null && curCompactedSteps > prevCompactedSteps) ||
+      (prevPct >= 80 && usedPct < 70 && hasUsage);
+    if (compactedJustNow) {
+      crabState.compactDismissedMap.delete(cid);
+      if (crabState.compactSendingCid === cid) {
+        crabState.compactSendingCid = '';
+        crabState.compactSendingUntil = 0;
+      }
+      crabState.quotaAnimKey = 'happy';
+      crabState.quotaAnimUntil = now + 3600;
+      if (crabState.quotaAnimTimer) clearTimeout(crabState.quotaAnimTimer);
+      crabState.quotaAnimTimer = setTimeout(() => {
+        crabState.quotaAnimTimer = null;
+        crabState.quotaAnimKey = '';
+        crabState.quotaAnimUntil = 0;
+        if (!destroyed && crabState.root && crabState.video) {
+          syncNekoDockVideo(crabState.root.getAttribute('data-ag-cs-mood') || 'idle');
+        }
+      }, 3700);
+      triggerNekoSquash(0.66);
+      showNekoBubble(getNekoLine('compacted'), 4200, { force: true, protectMs: 3200 });
+    }
+    crabState.lastCtxPctByCid.set(cid, usedPct);
+    crabState.lastCompactedStepsByCid.set(cid, curCompactedSteps);
+
+    const isSending = crabState.compactSendingCid === cid && crabState.compactSendingUntil > now;
+    if (usedPct < 80 && !isSending) {
+      crabState.compactDismissedMap.delete(cid);
+      el.removeAttribute('data-open');
+      el.removeAttribute('data-level');
+      el.removeAttribute('data-render-key');
+      return;
+    }
+
+    const dismissedPct = crabState.compactDismissedMap.get(cid);
+    if (!isSending && typeof dismissedPct === 'number' && usedPctRound < dismissedPct + 5 && usedPctRound < 95) {
+      el.removeAttribute('data-open');
+      return;
+    }
+
+    const zh = isZh();
+    const level = isSending ? 'sending' : usedPct >= 90 ? 'danger' : 'warn';
+    const mainText = isSending
+      ? zh
+        ? '正在压缩当前会话…'
+        : 'Compacting chat…'
+      : usedPct >= 90
+      ? zh
+        ? `上下文告急 ${usedPctRound}% · 点此自动压缩`
+        : `Context ${usedPctRound}% · Click to compact`
+      : zh
+      ? `上下文已用 ${usedPctRound}% · 点此自动压缩`
+      : `Context ${usedPctRound}% · Click to compact`;
+
+    // Gentle bounce when crossing 80% or 90% threshold for the first time
+    if (!isSending && ((prevPct > 0 && prevPct < 80 && usedPct >= 80) || (prevPct > 0 && prevPct < 90 && usedPct >= 90))) {
+      triggerNekoSquash(0.74);
+    }
+
+    const renderKey = `${cid}|${level}|${mainText}`;
+    if (el.getAttribute('data-render-key') === renderKey && el.getAttribute('data-open') === '1') return;
+    el.setAttribute('data-render-key', renderKey);
+    el.setAttribute('data-open', '1');
+    el.setAttribute('data-level', level);
+
+    const iconSvg = isSending
+      ? '<svg viewBox="0 0 16 16" class="ag-cs-neko-compact-ico is-spin" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="22 14" stroke-linecap="round"/></svg>'
+      : '<svg viewBox="0 0 16 16" class="ag-cs-neko-compact-ico" aria-hidden="true"><path d="M5 3.5 8 6.5l3-3M5 12.5 8 9.5l3 3M3 8h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    el.innerHTML = `
+      <button type="button" class="ag-cs-neko-compact-btn" data-compact-act="run" title="${escapeHtml(
+        zh ? '点击立即向当前会话发送 /compact 自动压缩上下文' : 'Click to run /compact automatically in this conversation'
+      )}" ${isSending ? 'disabled' : ''}>
+        <span class="ag-cs-neko-compact-dot"></span>
+        ${iconSvg}
+        <span class="ag-cs-neko-compact-txt">${escapeHtml(mainText)}</span>
+      </button>
+      ${
+        !isSending
+          ? `<button type="button" class="ag-cs-neko-compact-close" data-compact-act="dismiss" title="${zh ? '暂不提示' : 'Dismiss'}">×</button>`
+          : ''
+      }
+    `;
+  }
+
+  function closeNekoMenu() {
+    if (crabState.menuEl && crabState.menuEl.parentElement) {
+      crabState.menuEl.parentElement.removeChild(crabState.menuEl);
+    }
+    crabState.menuEl = null;
+  }
+
+  function applyNekoBoxStyle() {
+    if (!crabState.root) return;
+    const boxMode =
+      crabState.curBoxMode === 'dock-video'
+        ? 'dock-video'
+        : crabState.floating
+        ? crabState.curBoxMode === 'meme'
+          ? 'meme'
+          : 'chibi'
+        : crabState.curBoxMode || (crabState.poseMode === 'peek' ? 'peek' : 'chibi');
+    const w =
+      boxMode === 'dock-video'
+        ? NEKO_DOCK_VID_W
+        : boxMode === 'peek'
+        ? NEKO_PEEK_W
+        : boxMode === 'meme'
+        ? NEKO_MEME_W
+        : NEKO_W;
+    const h =
+      boxMode === 'dock-video'
+        ? NEKO_DOCK_VID_H
+        : boxMode === 'peek'
+        ? NEKO_PEEK_H
+        : boxMode === 'meme'
+        ? NEKO_MEME_H
+        : NEKO_H;
+    crabState.root.style.width = w + 'px';
+    crabState.root.style.height = h + 'px';
+    crabState.root.setAttribute('data-ag-cs-pose', boxMode);
+    if (crabState.floating) {
+      if (document.body && crabState.root.parentElement !== document.body) {
+        if (crabState.anchor) crabState.anchor.removeAttribute('data-ag-cs-crab-anchor');
+        document.body.appendChild(crabState.root);
+      }
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 800;
+      crabState.fx = Math.max(12, Math.min(vw - w - 12, crabState.fx));
+      crabState.fy = Math.max(12, Math.min(vh - h - 12, crabState.fy));
+      crabState.root.classList.add('is-floating');
+      crabState.root.style.left = Math.round(crabState.fx) + 'px';
+      crabState.root.style.top = Math.round(crabState.fy) + 'px';
+      crabState.root.style.right = 'auto';
+      crabState.root.style.bottom = 'auto';
+      crabState.root.style.transform = '';
+    } else {
+      crabState.root.classList.remove('is-floating');
+      crabState.root.style.left = '';
+      crabState.root.style.top = '';
+      crabState.root.style.right = '';
+      crabState.root.style.bottom = '';
+      crabState.root.style.transform = crabState.roamOffset ? `translateX(${Math.round(crabState.roamOffset)}px)` : '';
+      if (crabState.anchor && crabState.anchor.isConnected && crabState.root.parentElement !== crabState.anchor) {
+        crabState.anchor.setAttribute('data-ag-cs-crab-anchor', 'composer');
+        crabState.anchor.appendChild(crabState.root);
+      }
+    }
+    if (crabState.strip && !crabState.squashRaf) {
+      crabState.strip.style.transform = crabState.facing < 0 ? 'scaleX(-1)' : '';
+    }
+  }
+
+  function returnNekoHome() {
+    if (crabState.throwRaf) {
+      cancelAnimationFrame(crabState.throwRaf);
+      crabState.throwRaf = 0;
+    }
+    crabState.throwing = false;
+    crabState.floating = false;
+    crabState.facing = 1;
+    crabState.roamOffset = 0;
+    crabState.stage.reaction = null;
+    applyNekoBoxStyle();
+    triggerNekoSquash(0.62);
+    stepCrab();
+  }
+
+  function startNekoThrow() {
+    if (typeof requestAnimationFrame !== 'function' || !crabState.root) return;
+    if (crabState.throwRaf) cancelAnimationFrame(crabState.throwRaf);
+    crabState.throwing = true;
+    crabState.floating = true;
+    let lastTs = performance.now();
+    const step = (now) => {
+      if (destroyed || !crabState.root || !crabState.throwing) {
+        crabState.throwRaf = 0;
+        return;
+      }
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastTs) / 1000));
+      lastTs = now;
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 800;
+      const maxX = Math.max(12, vw - NEKO_W - 12);
+      const maxY = Math.max(12, vh - NEKO_H - 12);
+
+      crabState.vy += NEKO_GRAVITY * dt;
+      crabState.fx += crabState.vx * dt;
+      crabState.fy += crabState.vy * dt;
+
+      let impacted = 0;
+      if (crabState.fx < 12) {
+        crabState.fx = 12;
+        impacted = Math.max(impacted, Math.abs(crabState.vx));
+        crabState.vx = Math.abs(crabState.vx) * NEKO_RESTITUTION;
+        crabState.facing = 1;
+      } else if (crabState.fx > maxX) {
+        crabState.fx = maxX;
+        impacted = Math.max(impacted, Math.abs(crabState.vx));
+        crabState.vx = -Math.abs(crabState.vx) * NEKO_RESTITUTION;
+        crabState.facing = -1;
+      }
+
+      if (crabState.fy < 12) {
+        crabState.fy = 12;
+        impacted = Math.max(impacted, Math.abs(crabState.vy));
+        crabState.vy = Math.abs(crabState.vy) * NEKO_RESTITUTION;
+      } else if (crabState.fy >= maxY) {
+        crabState.fy = maxY;
+        impacted = Math.max(impacted, Math.abs(crabState.vy));
+        if (Math.abs(crabState.vy) < 45) {
+          crabState.vy = 0;
+          crabState.vx *= Math.exp(-NEKO_FRICTION * dt);
+        } else {
+          crabState.vy = -Math.abs(crabState.vy) * NEKO_RESTITUTION;
+          crabState.vx *= Math.exp(-NEKO_FRICTION * 0.35 * dt);
+        }
+      }
+
+      if (impacted > 280) {
+        const t = Math.min(1, Math.max(0, (impacted - 280) / 1200));
+        triggerNekoSquash(Math.min(0.8, 1 - t * 0.45));
+      }
+
+      applyNekoBoxStyle();
+
+      if (crabState.fy >= maxY - 0.5 && Math.abs(crabState.vy) < 10 && Math.abs(crabState.vx) < 15) {
+        crabState.throwing = false;
+        crabState.throwRaf = 0;
+        crabState.stage.reaction = null;
+        stepCrab();
+        return;
+      }
+      crabState.throwRaf = requestAnimationFrame(step);
+    };
+    crabState.throwRaf = requestAnimationFrame(step);
+  }
+
+  function scheduleNekoRoam() {
+    if (crabState.roamTimer) clearTimeout(crabState.roamTimer);
+    crabState.roamTimer = null;
+    if (destroyed || !crabState.roamEnabled || !crabState.root) return;
+    crabState.roamTimer = setTimeout(() => {
+      crabState.roamTimer = null;
+      if (destroyed || !crabState.roamEnabled || !crabState.root || crabState.throwing || crabState.stage.press) {
+        scheduleNekoRoam();
+        return;
+      }
+      const mood = crabState.root.getAttribute('data-ag-cs-mood') || 'idle';
+      if (mood === 'idle' || mood === 'happy') {
+        if (crabState.floating) {
+          const vw = window.innerWidth || 1280;
+          const nextX = Math.max(16, Math.min(vw - NEKO_W - 16, crabState.fx + (Math.random() - 0.5) * 240));
+          crabState.facing = nextX >= crabState.fx ? 1 : -1;
+          crabState.fx = nextX;
+        } else {
+          const nextOff = Math.max(-180, Math.min(0, crabState.roamOffset + (Math.random() - 0.5) * 140));
+          crabState.facing = nextOff >= crabState.roamOffset ? 1 : -1;
+          crabState.roamOffset = nextOff;
+        }
+        applyNekoBoxStyle();
+        triggerNekoSquash(0.84);
+      }
+      scheduleNekoRoam();
+    }, 4500 + Math.random() * 4500);
+  }
+
+  function scheduleNekoChatter() {
+    if (crabState.chatterTimer) clearTimeout(crabState.chatterTimer);
+    crabState.chatterTimer = null;
+    if (destroyed || !crabState.root) return;
+    crabState.chatterTimer = setTimeout(() => {
+      crabState.chatterTimer = null;
+      if (destroyed || !crabState.root) return;
+      if (!document.hidden && crabState.bubbleEnabled && Date.now() - crabState.lastBubbleAt > 30000) {
+        const mood = crabState.root.getAttribute('data-ag-cs-mood') || 'idle';
+        if (mood === 'sleeping') showNekoBubble(getNekoLine('sleep'), 2800);
+        else if (mood === 'idle') showNekoBubble(getNekoLine('chatter'), 3600);
+      }
+      scheduleNekoChatter();
+    }, 36000 + Math.random() * 20000);
+  }
+
+  function openNekoContextMenu(clientX, clientY) {
+    closeNekoMenu();
+    if (!document.body) return;
+    const zh = isZh();
+    const menu = document.createElement('div');
+    menu.className = 'ag-cs-neko-menu';
+    menu.setAttribute('data-ag-no-i18n', '');
+    const pickAction = (dockKey, bubbleKind) => () => {
+      crabState.forcedMood = dockKey;
+      crabState.stage.asleep = dockKey === 'lie_sleep';
+      triggerNekoSquash(0.74);
+      if (crabState.stage.current) showCrabSheet(crabState.stage.current, Date.now());
+      else stepCrab();
+      if (bubbleKind) showNekoBubble(getNekoLine(bubbleKind));
+    };
+
+    const items = [
+      {
+        label: zh ? '💰 看看额度用量' : '💰 Check Quota Usage',
+        action: () => {
+          showNekoQuotaBubble();
+        },
+      },
+      { sep: true },
+      {
+        label: zh ? '✨ 智能随动 · 20动作轮播 (默认)' : '✨ Auto Dynamic · 20 Actions',
+        active: !crabState.forcedMood,
+        action: () => {
+          crabState.forcedMood = '';
+          crabState.stage.asleep = false;
+          triggerNekoSquash(0.75);
+          if (crabState.stage.current) showCrabSheet(crabState.stage.current, Date.now());
+          else stepCrab();
+        },
+      },
+      { sep: true },
+      { group: zh ? '🐾 趴框系列 (10 动作)' : '🐾 Lying on Edge (10)' },
+      ...NEKO_DOCK_CATALOG.filter((c) => c.stance === 'lie').map((c) => ({
+        label: zh ? c.zh : c.en,
+        active: canonicalDockVideoKey(crabState.forcedMood) === c.key && Boolean(crabState.forcedMood),
+        action: pickAction(
+          c.key,
+          c.key === 'lie_sleep'
+            ? 'sleep'
+            : c.key === 'lie_think'
+            ? 'thinking'
+            : c.key === 'lie_coding'
+            ? 'typing'
+            : c.key === 'lie_watch_typing'
+            ? 'watch_typing'
+            : c.key === 'lie_peek_shy'
+            ? 'poke'
+            : 'chatter'
+        ),
+      })),
+      { sep: true },
+      { group: zh ? '🎀 坐框系列 (10 动作)' : '🎀 Sitting on Edge (10)' },
+      ...NEKO_DOCK_CATALOG.filter((c) => c.stance === 'sit').map((c) => ({
+        label: zh ? c.zh : c.en,
+        active: canonicalDockVideoKey(crabState.forcedMood) === c.key && Boolean(crabState.forcedMood),
+        action: pickAction(
+          c.key,
+          c.key === 'sit_happy'
+            ? 'happy'
+            : c.key === 'sit_background'
+            ? 'background'
+            : c.key === 'sit_angry_pout'
+            ? 'error'
+            : c.key === 'sit_milk_tea' || c.key === 'sit_snack'
+            ? 'snack'
+            : 'chatter'
+        ),
+      })),
+      { sep: true },
+      {
+        label: (crabState.roamEnabled ? '☑ ' : '☐ ') + (zh ? '沿输入框漫游' : 'Roam on Input Bar'),
+        action: () => {
+          crabState.roamEnabled = !crabState.roamEnabled;
+          if (!crabState.roamEnabled) {
+            crabState.roamOffset = 0;
+            crabState.facing = 1;
+            applyNekoBoxStyle();
+          } else {
+            scheduleNekoRoam();
+          }
+        },
+      },
+      {
+        label: (crabState.bubbleEnabled ? '☑ ' : '☐ ') + (zh ? '头顶气泡台词' : 'Speech Bubbles'),
+        action: () => {
+          crabState.bubbleEnabled = !crabState.bubbleEnabled;
+          if (!crabState.bubbleEnabled && crabState.bubble) crabState.bubble.removeAttribute('data-open');
+        },
+      },
+      {
+        label: (cfg.desktopPet !== false ? '☑ ' : '☐ ') + (zh ? '桌面置顶猫耳娘' : 'Desktop Topmost Pet'),
+        action: () => {
+          saveSetting('desktopPet', cfg.desktopPet === false);
+          syncNekoToDesktop(crabState.lastInfo, true);
+        },
+      },
+    ];
+
+    for (const it of items) {
+      if (it.sep) {
+        const sep = document.createElement('div');
+        sep.className = 'ag-cs-neko-menu-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      if (it.group) {
+        const grp = document.createElement('div');
+        grp.className = 'ag-cs-neko-menu-group';
+        grp.textContent = it.group;
+        menu.appendChild(grp);
+        continue;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ag-cs-neko-menu-item' + (it.active ? ' is-active' : '');
+      btn.textContent = it.label;
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        closeNekoMenu();
+        it.action();
+      });
+      menu.appendChild(btn);
+    }
+
+    document.body.appendChild(menu);
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 800;
+    const mw = menu.offsetWidth || 184;
+    const mh = menu.offsetHeight || 360;
+    menu.style.left = Math.max(8, Math.min(vw - mw - 8, clientX)) + 'px';
+    menu.style.top = Math.max(8, Math.min(vh - mh - 8, clientY - mh)) + 'px';
+    crabState.menuEl = menu;
+  }
 
   function playCrabAnimation(strip, key, mode) {
     if (crabState.stage.animation) {
@@ -2429,35 +3730,19 @@
       crabState.stage.animation = null;
     }
     const sheet = crabAssets.CRAB_SHEETS[key];
-    if (!sheet) return;
-    if (motionReduced() && !crabState.stage.reaction) {
-      strip.style.transform = mascotCore.frameOffset(sheet, sheet.still, crabAssets.CRAB_GUTTER);
-      return;
-    }
-    strip.style.transform = '';
-    const keyframes = [];
-    const duration = sheet.frames * crabAssets.CRAB_FRAME_MS;
-    for (let f = 0; f < sheet.frames; f++) {
-      keyframes.push({
-        offset: f / sheet.frames,
-        transform: mascotCore.frameOffset(sheet, f, crabAssets.CRAB_GUTTER),
-        easing: 'steps(1)',
-      });
-    }
-    keyframes.push({
-      offset: 1,
-      transform: mascotCore.frameOffset(sheet, mode === 'loop' ? 0 : sheet.frames - 1, crabAssets.CRAB_GUTTER),
-    });
-    const anim = strip.animate(keyframes, {
-      duration,
-      iterations: mode === 'loop' ? Infinity : 1,
-      fill: 'forwards',
-    });
-    crabState.stage.animation = anim;
-    if (mode === 'once') {
+    const duration = Math.max(900, (sheet ? sheet.frames : 16) * crabAssets.CRAB_FRAME_MS);
+    if (mode === 'once' && strip && typeof strip.animate === 'function') {
+      const anim = strip.animate([{ opacity: 1 }, { opacity: 1 }], { duration, iterations: 1, fill: 'forwards' });
+      crabState.stage.animation = anim;
       anim.finished.then(
         () => {
-          if (crabState.stage.animation !== anim || !crabState.stage.current || crabState.stage.current.key !== key || crabState.stage.current.done) return;
+          if (
+            crabState.stage.animation !== anim ||
+            !crabState.stage.current ||
+            crabState.stage.current.key !== key ||
+            crabState.stage.current.done
+          )
+            return;
           crabState.stage.current.done = true;
           mascotCore.finishStage(crabState.stage, key, Date.now(), Math.random);
           stepCrab();
@@ -2468,25 +3753,37 @@
   }
 
   function showCrabSheet(next, now) {
-    const sheet = crabAssets.CRAB_SHEETS[next.key];
-    const urls = crabAssets.CRAB_SHEET_URLS[next.key];
-    if (!sheet || !urls || !crabState.root || !crabState.strip) return;
-    const [cw, ch] = mascotCore.cellSize(sheet, crabAssets.CRAB_GUTTER);
+    if (!crabState.root || !crabState.strip) return;
+    const prevMood = crabState.root.getAttribute('data-ag-cs-mood') || 'idle';
     crabState.stage.current = { key: next.key, mode: next.mode, priority: next.priority, start: now };
     if (crabState.stage.reaction && crabState.stage.reaction.key === next.key) {
       crabState.stage.reaction.fresh = false;
     }
-    const st = crabState.root.style;
-    st.setProperty('--ag-cs-mascot-sheet', `url("${urls.body}")`);
-    st.setProperty('--ag-cs-crab-ink', `url("${urls.ink}")`);
-    st.setProperty('--ag-cs-mascot-x', String(sheet.box[0]));
-    st.setProperty('--ag-cs-mascot-y', String(sheet.box[1]));
-    st.setProperty('--ag-cs-mascot-w', String(sheet.box[2]));
-    st.setProperty('--ag-cs-mascot-h', String(sheet.box[3]));
-    st.setProperty('--ag-cs-mascot-cell-w', String(cw));
-    st.setProperty('--ag-cs-mascot-columns', '8');
-    st.setProperty('--ag-cs-mascot-strip-h', String(ch * Math.ceil(sheet.frames / 8)));
+    const mood = resolveNekoMood(next.key);
+    if (mood === 'idle-look' && prevMood !== 'idle-look') {
+      crabState.facing = crabState.facing < 0 ? 1 : -1;
+    } else if (mood === 'idle-laptop' && prevMood !== 'idle-laptop') {
+      crabState.idleMemeKey = NEKO_IDLE_MEME_KEYS[Math.floor(Math.random() * NEKO_IDLE_MEME_KEYS.length)];
+    }
+    const vis = resolveNekoVisual(mood);
+    crabState.curBoxMode = vis.boxMode;
     crabState.root.setAttribute('data-animation', next.key);
+    crabState.root.setAttribute('data-ag-cs-mood', mood);
+    if (!syncNekoDockVideo(mood) && crabState.img && vis.src) {
+      if (crabState.img.getAttribute('data-pose') !== vis.key) {
+        crabState.img.setAttribute('data-pose', vis.key);
+        crabState.img.src = vis.src;
+      }
+    }
+    applyNekoBoxStyle();
+    if (prevMood !== mood) {
+      if (mood === 'thinking') showNekoBubble(getNekoLine('thinking'), 3200);
+      else if (mood === 'typing' || mood === 'coding') showNekoBubble(getNekoLine('typing'), 2800);
+      else if (mood === 'happy') showNekoBubble(getNekoLine('happy'), 3200);
+      else if (mood === 'idle-wave' || mood === 'ciallo') showNekoBubble(getNekoLine('ciallo'), 2800);
+      else if (mood === 'idle-laptop' || mood === 'snack') showNekoBubble(getNekoLine('snack'), 2800);
+      else if (mood === 'error') showNekoBubble(getNekoLine('error'), 3500);
+    }
     playCrabAnimation(crabState.strip, next.key, next.mode);
     if (!crabState.root.hasAttribute('data-ready')) crabState.root.setAttribute('data-ready', '');
   }
@@ -2532,48 +3829,765 @@
     }
   }
 
+  function formatStepLabel(st, zh) {
+    if (!st) return '';
+    if (st.summary && String(st.summary).trim()) {
+      const s = String(st.summary).trim();
+      return s.length > 26 ? s.slice(0, 25) + '…' : s;
+    }
+    const rawTool = String(st.tool || '').trim();
+    const shortTool = rawTool.length > 22 ? rawTool.slice(0, 21) + '…' : rawTool;
+    const t = shortTool ? ` ${shortTool}` : '';
+    switch (st.type) {
+      case 'plannerResponse':
+        return zh ? '思考与生成回复' : 'Planning & reply';
+      case 'commandLine':
+      case 'runCommand':
+      case 'commandStatus':
+        return (zh ? '运行命令' : 'Run command') + (rawTool && rawTool !== 'run_command' && rawTool !== 'command_status' ? t : '');
+      case 'editFile':
+      case 'writeToFile':
+      case 'codeAction':
+        return (zh ? '编辑文件' : 'Edit file') + (rawTool && !rawTool.startsWith('edit_file') ? t : rawTool.includes(':') ? ' ' + rawTool.split(':').slice(1).join(':').trim() : '');
+      case 'viewFile':
+      case 'readFile':
+        return (zh ? '读取代码' : 'Read file') + (rawTool.includes(':') ? ' ' + rawTool.split(':').slice(1).join(':').trim() : '');
+      case 'listDir':
+        return (zh ? '浏览目录' : 'List dir') + (rawTool && rawTool !== 'list_dir' ? t : '');
+      case 'search':
+      case 'grep':
+      case 'grepSearch':
+      case 'find':
+      case 'findByName':
+        return (zh ? '搜索检索' : 'Search') + (rawTool && rawTool !== 'grep_search' && rawTool !== 'find_by_name' ? t : '');
+      case 'searchWeb':
+        return zh ? '网页搜索' : 'Web search';
+      case 'subagent':
+        return (zh ? '子代理协作' : 'Subagent') + t;
+      default: {
+        const low = rawTool.toLowerCase();
+        if (zh) {
+          if (low.includes('batch_search')) return '极速批量检索';
+          if (low.includes('apply_edits')) return '批量原子编辑';
+          if (low.includes('quick_outline')) return '提取代码大纲';
+          if (low.includes('read_slices')) return '精准切片读取';
+          if (low.includes('run_checks')) return '并发校验测试';
+          if (low.includes('run_command')) return '运行命令';
+          if (low.includes('read_file') || low.includes('view_file')) return '读取代码';
+          if (low.includes('edit_file') || low.includes('write_file') || low.includes('replace_file')) return '编辑文件';
+          if (low.includes('manage_task')) return '查看后台任务';
+          if (low.includes('schedule')) return '定时巡检';
+          if (low.includes('search') || low.includes('grep') || low.includes('find')) return '检索代码';
+          if (low.includes('browser') || low.includes('web')) return '网页操作';
+          if (low.includes('subagent') || low.includes('swarm')) return '子代理协作';
+          if (low === 'update_steps' || low === 'update_focus') return '规划任务阶段';
+        }
+        return (shortTool || st.type || (zh ? '执行步骤' : 'Step')).slice(0, 26);
+      }
+    }
+  }
+
+  function resolveTaskStageInfo(info, fallbackLabel, zh) {
+    const plan = Array.isArray(info?.planSteps) ? info.planSteps.filter((x) => x && x.title) : [];
+    const focus = String(info?.currentFocus || '').trim();
+    if (plan.length > 0) {
+      let activeIdx = plan.findIndex((x) => x.status === 'in_progress');
+      if (activeIdx < 0) activeIdx = plan.findIndex((x) => x.status === 'pending');
+      if (activeIdx < 0) activeIdx = plan.length - 1;
+      const cur = plan[activeIdx];
+      const rawTitle = String(cur?.title || '').trim();
+      const stageLabel = `[${activeIdx + 1}/${plan.length}] ${rawTitle}`;
+      const lines = plan.slice(0, 8).map((x) => {
+        const icon =
+          x.status === 'in_progress'
+            ? '⟳ '
+            : x.status === 'done'
+            ? '✓ '
+            : x.status === 'failed'
+            ? '! '
+            : x.status === 'skipped'
+            ? '– '
+            : '○ ';
+        return icon + String(x.title || '').trim();
+      });
+      if (focus && focus !== rawTitle && !rawTitle.includes(focus)) {
+        lines.push((zh ? '· 当前：' : '· Focus: ') + (focus.length > 30 ? focus.slice(0, 29) + '…' : focus));
+      }
+      return { hasStage: true, stageLabel, detailLines: lines };
+    }
+    if (focus) {
+      return { hasStage: true, stageLabel: focus, detailLines: null };
+    }
+    return { hasStage: false, stageLabel: fallbackLabel || '', detailLines: null };
+  }
+
+  function resolveTurnSteps(info) {
+    const t = Number(info?.turnSteps || 0);
+    if (t > 0) return t;
+    const r = Array.isArray(info?.recentSteps) ? info.recentSteps.length : 0;
+    const all = Number(info?.steps || 0);
+    return Math.max(r, all);
+  }
+
+  function renderNekoTaskBubble(info) {
+    if (!crabState.taskPanel) return;
+    const panel = crabState.taskPanel;
+    // When standalone desktop pet is active, do not duplicate the task progress bubble inside the web composer corner
+    if (cfg.desktopPet !== false && typeof window.__agCsNekoBinding === 'function') {
+      panel.removeAttribute('data-open');
+      panel.removeAttribute('data-state');
+      return;
+    }
+    const zh = isZh();
+    const isRunning = Boolean(info?.isRunning);
+    const isThinking = Boolean(info?.isThinking);
+    const hasError = Boolean(info?.hasError);
+    const doneState = crabState.taskDoneState;
+    const stepsCount = resolveTurnSteps(info);
+    const callsCount = Number(info?.calls || 0);
+    const subRunning = Array.isArray(info?.subagents) ? info.subagents.filter((s) => s.isRunning).length : 0;
+    const show = isRunning || doneState === 'done' || doneState === 'error';
+
+    if (!show) {
+      panel.removeAttribute('data-open');
+      panel.removeAttribute('data-state');
+      return;
+    }
+
+    const stateTag = isRunning ? (isThinking ? 'thinking' : 'running') : doneState === 'error' || hasError ? 'error' : 'done';
+    const elapsedSec = isRunning
+      ? crabState.taskStartedAt
+        ? Math.max(1, Math.round((Date.now() - crabState.taskStartedAt) / 1000))
+        : 0
+      : crabState.lastTaskElapsedSec;
+    const elapsedTxt = elapsedSec > 0 ? `${elapsedSec}s` : '';
+
+    const recent = Array.isArray(info?.recentSteps) ? info.recentSteps : [];
+    const liveStep = [...recent].reverse().find((s) => s.status === 1 || s.status === 2);
+    const lastStep = recent[recent.length - 1];
+    const hasPendingBg = Boolean(Number(info?.pendingBgTasks || 0) > 0 || info?.isBackgroundSuspended);
+    const activeLabel = liveStep
+      ? formatStepLabel(liveStep, zh)
+      : hasPendingBg
+      ? zh
+        ? '后台挂起运行中'
+        : 'Background task'
+      : subRunning > 0
+      ? zh
+        ? `子代理协作 (${subRunning})`
+        : `Subagent (${subRunning})`
+      : lastStep
+      ? formatStepLabel(lastStep, zh)
+      : '';
+
+    let pillText = '';
+    if (stateTag === 'thinking') {
+      pillText = zh
+        ? `✦ 思考中 · ${stepsCount > 0 ? `${stepsCount}步` : `第${callsCount || 1}轮`}${elapsedTxt ? ' · ' + elapsedTxt : ''}`
+        : `✦ Thinking · ${stepsCount} steps${elapsedTxt ? ' · ' + elapsedTxt : ''}`;
+    } else if (stateTag === 'running') {
+      pillText = zh
+        ? `⚡ ${activeLabel || (subRunning ? `子代理协作 (${subRunning})` : '正在执行')} · ${stepsCount > 0 ? `${stepsCount}步` : '进行中'}${elapsedTxt ? ' · ' + elapsedTxt : ''}`
+        : `⚡ ${activeLabel || 'Working'} · ${stepsCount} steps`;
+    } else if (stateTag === 'error') {
+      pillText = zh ? `! 任务遇到异常 · 点击查看` : `! Task warning · Click to view`;
+    } else {
+      const doneSteps = Math.max(stepsCount, crabState.lastTaskSteps || 0);
+      pillText = zh
+        ? `✓ 任务已完成${doneSteps > 0 ? ` · 本轮${doneSteps}步` : ''}${elapsedTxt ? ' · ' + elapsedTxt : ''}`
+        : `✓ Task done${doneSteps > 0 ? ` · ${doneSteps} steps` : ''}${elapsedTxt ? ' · ' + elapsedTxt : ''}`;
+    }
+
+    const renderKey = `${stateTag}|${crabState.taskExpanded ? 1 : 0}|${pillText}|${recent.map((s) => s.type + s.status + s.tool + (s.summary || '')).join(',')}`;
+    if (panel.getAttribute('data-render-key') === renderKey) return;
+    panel.setAttribute('data-render-key', renderKey);
+    panel.setAttribute('data-open', '1');
+    panel.setAttribute('data-state', stateTag);
+    if (crabState.taskExpanded) panel.classList.add('is-expanded');
+    else panel.classList.remove('is-expanded');
+
+    const taskTitle = info?.activeTaskTitle ? escapeHtml(info.activeTaskTitle) : zh ? '当前对话任务' : 'Active Task';
+    const modelStr = info?.lastModel ? escapeHtml(info.lastModel) : '';
+    const stepsHtml = recent
+      .map((st) => {
+        const stCls = st.status === 1 || st.status === 2 ? 'is-active' : st.status === 4 || st.status === 6 ? 'is-err' : 'is-ok';
+        const icon = stCls === 'is-active' ? '⟳' : stCls === 'is-err' ? '!' : '✓';
+        return `<div class="ag-cs-neko-task-step ${stCls}"><span>${icon}</span><span>${escapeHtml(formatStepLabel(st, zh))}</span></div>`;
+      })
+      .join('');
+
+    panel.innerHTML = `
+      <div class="ag-cs-neko-task-pill" data-act="toggle">
+        <span class="ag-cs-neko-task-dot"></span>
+        <span class="ag-cs-neko-task-txt">${escapeHtml(pillText)}</span>
+        <span class="ag-cs-neko-task-chev">${crabState.taskExpanded ? '▴' : '▾'}</span>
+        ${!isRunning ? `<button type="button" class="ag-cs-neko-task-dismiss" data-act="dismiss" title="${zh ? '知道了' : 'Dismiss'}">×</button>` : ''}
+      </div>
+      ${
+        crabState.taskExpanded
+          ? `<div class="ag-cs-neko-task-body">
+              <div class="ag-cs-neko-task-head">${taskTitle}</div>
+              <div class="ag-cs-neko-task-bar"><span class="ag-cs-neko-task-bar-fill"></span></div>
+              <div class="ag-cs-neko-task-meta">${modelStr ? modelStr + ' · ' : ''}${zh ? `第 ${callsCount} 轮 · ${stepsCount} 步` : `T${callsCount} · ${stepsCount} steps`}${elapsedTxt ? ' · ' + elapsedTxt : ''}</div>
+              ${stepsHtml ? `<div class="ag-cs-neko-task-steps">${stepsHtml}</div>` : ''}
+            </div>`
+          : ''
+      }
+    `;
+  }
+
+  const bgConvoTrack = new Map(); // cascadeId -> { startedAt, startSteps, wasRunning, doneState, doneAt, lastSteps, lastFetchAt, lastSeenStep, lastSeenMod, activeUntil }
+  const bgSummaryBaseline = new Map(); // cascadeId -> { stepCount, lastModSec }
+  let bgPollTimer = null;
+
+  function ensureBgLivePoll(hasActiveBg) {
+    if (!hasActiveBg || destroyed) {
+      if (bgPollTimer) {
+        clearInterval(bgPollTimer);
+        bgPollTimer = null;
+      }
+      return;
+    }
+    if (bgPollTimer) return;
+    bgPollTimer = setInterval(() => {
+      if (destroyed) {
+        clearInterval(bgPollTimer);
+        bgPollTimer = null;
+        return;
+      }
+      syncNekoToDesktop(crabState.lastInfo, false);
+    }, 1000);
+  }
+
+  function isSummaryEntryRunning(s, nowMs) {
+    if (!s || typeof s !== 'object') return false;
+    const lastModSec = Number(s.lastModifiedTime?.seconds || 0);
+    const hasBgOrSub = Boolean(
+      Number(s.backgroundTaskCount || 0) > 0 ||
+        s.hasRunningSubagents ||
+        Number(s.activeSubagentCount || 0) > 0
+    );
+    if (lastModSec > 0 && nowMs / 1000 - lastModSec > (hasBgOrSub ? 3600 : 600)) {
+      return false;
+    }
+    if (s.notFullyIdle || hasBgOrSub) return true;
+    if (s.status === 2) return true;
+    if (typeof s.status === 'string') {
+      const u = s.status.toUpperCase();
+      if (u.includes('RUNNING')) return true;
+    }
+    return false;
+  }
+
+  function shortTitleLabel(rawTitle, fallback) {
+    const t = String(rawTitle || '').replace(/\s+/g, ' ').trim();
+    if (!t) return fallback || '';
+    return t.length > 14 ? t.slice(0, 13) + '…' : t;
+  }
+
+  function collectConcurrentDesktopTasks(primaryCid, primaryTask, zh) {
+    const tasks = [];
+    if (primaryTask && primaryTask.statusText) {
+      tasks.push(primaryTask);
+    }
+    let anyBgRunning = false;
+    try {
+      const h = ensureHooks(true);
+      const st = h?.store?.getState?.();
+      const sums = st?.trajectorySummaries?.summaries || st?.cascadeTrajectorySummaries || {};
+      const now = Date.now();
+      for (const [cid, rawEntry] of Object.entries(sums)) {
+        if (!cid || cid === primaryCid) continue;
+        const s = unwrapTrajSummary(rawEntry);
+        const meta = s.trajectoryMetadata || {};
+        // Skip child subagents (already aggregated under their parent conversation)
+        if (meta.parentConversationId) continue;
+
+        const rawStepCount = Number(s.stepCount || 0);
+        const lastModSec = Number(s.lastModifiedTime?.seconds || 0);
+        const prevBase = bgSummaryBaseline.get(cid);
+        // Only treat real stepCount growth (> 0) as background activity; never trigger on empty new-chat metadata touch
+        const stepGrew = Boolean(prevBase && rawStepCount > 0 && rawStepCount > prevBase.stepCount);
+        bgSummaryBaseline.set(cid, { stepCount: rawStepCount, lastModSec });
+
+        const cached = activeTrajCache.get(cid)?.data || null;
+        let tr = bgConvoTrack.get(cid);
+        const hasBgSignal = Boolean(
+          Number(s.backgroundTaskCount || 0) > 0 ||
+            s.hasRunningSubagents ||
+            Number(s.activeSubagentCount || 0) > 0 ||
+            Number(cached?.pendingBgTasks || 0) > 0
+        );
+        const turnExplicitlyDone = Boolean(
+          !hasBgSignal &&
+            cached &&
+            Number(cached.steps || 0) >= rawStepCount &&
+            cached.turnSteps > 0 &&
+            !cached.isRunning &&
+            !cached.awaitingNextTurn
+        );
+        const summaryRunning = !turnExplicitlyDone && isSummaryEntryRunning(s, now);
+        const cachedRunning = Boolean(cached?.isRunning && lastModSec > 0 && now / 1000 - lastModSec <= 600);
+        const recentlyGrew = Boolean(!turnExplicitlyDone && (stepGrew || (tr && tr.activeUntil > now)));
+        const running = summaryRunning || cachedRunning || recentlyGrew;
+
+        if (running) {
+          anyBgRunning = true;
+          if (!tr) {
+            tr = {
+              startedAt: now,
+              startSteps: rawStepCount > 0 ? Math.max(0, rawStepCount - 1) : 0,
+              wasRunning: true,
+              doneState: '',
+              doneAt: 0,
+              lastSteps: 1,
+              lastFetchAt: 0,
+              activeUntil: stepGrew ? now + 4500 : 0,
+            };
+            bgConvoTrack.set(cid, tr);
+          } else {
+            if (!tr.wasRunning) {
+              tr.startedAt = now;
+              tr.startSteps = rawStepCount > 0 ? Math.max(0, rawStepCount - 1) : 0;
+              tr.wasRunning = true;
+              tr.doneState = '';
+              tr.doneAt = 0;
+              tr.lastSteps = 0;
+            }
+            if (stepGrew) tr.activeUntil = now + 4500;
+          }
+          // Throttled live detail fetch for background running conversations, then push immediately!
+          if (now - tr.lastFetchAt >= 1200) {
+            tr.lastFetchAt = now;
+            fetchActiveConvo(cid, true)
+              .then(() => {
+                if (!destroyed) syncNekoToDesktop(crabState.lastInfo, false);
+              })
+              .catch(() => {});
+          }
+        } else if (tr && tr.wasRunning) {
+          tr.wasRunning = false;
+          tr.doneState = cached?.hasError ? 'error' : 'done';
+          tr.doneAt = now;
+        }
+        if (!tr) continue;
+        // Expire old completed background items after 120s
+        if (!running && tr.doneAt && now - tr.doneAt > 120000) {
+          bgConvoTrack.delete(cid);
+          continue;
+        }
+        if (!running && !tr.doneState) continue;
+
+        const totalSteps = Math.max(rawStepCount, Number(cached?.steps || 0));
+        const deltaSteps = Math.max(
+          tr.lastSteps || 0,
+          totalSteps > tr.startSteps ? totalSteps - tr.startSteps : Number(cached?.turnSteps || 0)
+        );
+        if (deltaSteps > tr.lastSteps) tr.lastSteps = deltaSteps;
+
+        const elapsedSec = running
+          ? Math.max(1, Math.round((now - tr.startedAt) / 1000))
+          : Math.max(1, Math.round(((tr.doneAt || now) - tr.startedAt) / 1000));
+        const title =
+          String((typeof s.summary === 'string' ? s.summary : '') || cached?.activeTaskTitle || '').trim() ||
+          (zh ? `会话 ${cid.slice(0, 6)}` : `Chat ${cid.slice(0, 6)}`);
+        const recent = Array.isArray(cached?.recentSteps) ? cached.recentSteps : [];
+        const liveStep = [...recent].reverse().find((x) => x.status === 1 || x.status === 2);
+        const lastStep = recent[recent.length - 1];
+        const isBgSuspended = Boolean(
+          Number(s.backgroundTaskCount || 0) > 0 ||
+            Number(cached?.pendingBgTasks || 0) > 0 ||
+            cached?.isBackgroundSuspended
+        );
+        const bgSubRunning =
+          (Array.isArray(cached?.subagents) ? cached.subagents.filter((x) => x.isRunning).length : 0) ||
+          Number(s.activeSubagentCount || 0) ||
+          (s.hasRunningSubagents ? 1 : 0);
+        const activeLabel = liveStep
+          ? formatStepLabel(liveStep, zh)
+          : isBgSuspended
+          ? zh
+            ? '后台挂起运行中'
+            : 'Background task'
+          : bgSubRunning > 0
+          ? zh
+            ? `子代理协作 (${bgSubRunning})`
+            : `Subagent (${bgSubRunning})`
+          : lastStep
+          ? formatStepLabel(lastStep, zh)
+          : '';
+
+        const stageInfo = resolveTaskStageInfo(cached, activeLabel, zh);
+        let workState = 'idle';
+        let statusText = '';
+        if (running) {
+          if (cached?.isThinking) {
+            workState = 'thinking';
+            statusText = stageInfo.hasStage
+              ? `✦ ${stageInfo.stageLabel} (${elapsedSec}s)`
+              : zh
+              ? `✦ 思考中 · ${deltaSteps > 0 && deltaSteps <= 99 ? `${deltaSteps}步 ` : ''}(${elapsedSec}s)`
+              : `✦ Thinking · ${deltaSteps || 1}`;
+          } else {
+            workState = 'working';
+            statusText = stageInfo.hasStage
+              ? `⚡ ${stageInfo.stageLabel} (${elapsedSec}s)`
+              : zh
+              ? `⚡ ${stageInfo.stageLabel || '后台执行中'}${deltaSteps > 0 && deltaSteps <= 99 ? ` · ${deltaSteps}步` : ''} (${elapsedSec}s)`
+              : `⚡ ${stageInfo.stageLabel || 'Working'} (${elapsedSec}s)`;
+          }
+        } else if (tr.doneState === 'done') {
+          workState = 'done';
+          statusText = zh
+            ? `✓ 已完成${deltaSteps > 0 && deltaSteps <= 99 ? ` · ${deltaSteps}步` : ''} (${elapsedSec}s)`
+            : `✓ Done${deltaSteps > 0 ? ` · ${deltaSteps}` : ''} (${elapsedSec}s)`;
+        } else if (tr.doneState === 'error') {
+          workState = 'error';
+          statusText = zh ? `! 任务遇到异常` : `! Task warning`;
+        }
+        if (statusText) {
+          const bgSubTotal = Math.max(
+            bgSubRunning,
+            Array.isArray(cached?.subagents) ? cached.subagents.length : 0,
+            Number(s.subagentCount || 0)
+          );
+          const bgAgentMode = bgSubTotal > 0 ? 'multi' : 'single';
+          tasks.push({
+            id: cid,
+            shortTitle: shortTitleLabel(title, cid.slice(0, 6)),
+            taskTitle: title,
+            workState,
+            running,
+            doneState: running ? '' : tr.doneState,
+            statusText,
+            steps: deltaSteps,
+            elapsedSec,
+            agentMode: bgAgentMode,
+            subagentRunning: bgSubRunning,
+            subagentTotal: bgSubTotal,
+            detailLines:
+              stageInfo.detailLines ||
+              recent
+                .map((x) => {
+                  const icon = x.status === 1 || x.status === 2 ? '⟳ ' : x.status === 4 || x.status === 6 ? '! ' : '✓ ';
+                  return icon + formatStepLabel(x, zh);
+                })
+                .filter(Boolean),
+          });
+        }
+      }
+    } catch {}
+    ensureBgLivePoll(anyBgRunning);
+    return tasks;
+  }
+
+  function syncNekoToDesktop(info, force = false) {
+    try {
+      const send = window.__agCsNekoBinding;
+      if (typeof send !== 'function') return;
+      const isRunning = Boolean(info?.isRunning);
+      const isThinking = Boolean(info?.isThinking);
+      const isWaiting = Boolean(info?.isWaiting);
+      const mood = crabState.root?.getAttribute('data-ag-cs-mood') || 'idle';
+      const desktopPose =
+        mood === 'thinking'
+          ? 'think'
+          : mood === 'happy' || mood === 'typing' || mood === 'idle-wave'
+          ? 'happy'
+          : mood === 'sleeping' || mood === 'waking'
+          ? 'sleep'
+          : mood === 'error' || mood === 'poke-left' || mood === 'poke-right' || mood === 'tickle'
+          ? 'shy'
+          : 'idle';
+      const pose = desktopPose;
+      const zh = isZh();
+      const rawTotalSteps = Number(info?.steps || 0);
+      const deltaSteps =
+        typeof crabState.taskStartStepCount === 'number' && rawTotalSteps > crabState.taskStartStepCount
+          ? rawTotalSteps - crabState.taskStartStepCount
+          : resolveTurnSteps(info);
+      const steps = isRunning ? deltaSteps : Math.max(deltaSteps, crabState.lastTaskSteps || 0);
+      const calls = Number(info?.calls || 0);
+      const elapsedSec = isRunning
+        ? crabState.taskStartedAt
+          ? Math.max(1, Math.round((Date.now() - crabState.taskStartedAt) / 1000))
+          : 0
+        : crabState.lastTaskElapsedSec;
+      const recent = Array.isArray(info?.recentSteps) ? info.recentSteps : [];
+      const liveStep = [...recent].reverse().find((s) => s.status === 1 || s.status === 2);
+      const lastStep = recent[recent.length - 1];
+      const subRunning = Array.isArray(info?.subagents) ? info.subagents.filter((s) => s.isRunning).length : 0;
+      const hasPendingBg = Boolean(Number(info?.pendingBgTasks || 0) > 0 || info?.isBackgroundSuspended);
+      const activeLabel = liveStep
+        ? formatStepLabel(liveStep, zh)
+        : hasPendingBg
+        ? zh
+          ? '后台挂起运行中'
+          : 'Background task'
+        : subRunning > 0
+        ? zh
+          ? `子代理协作 (${subRunning})`
+          : `Subagent (${subRunning})`
+        : lastStep
+        ? formatStepLabel(lastStep, zh)
+        : '';
+
+      const stageInfo = resolveTaskStageInfo(info, activeLabel, zh);
+      let workState = 'idle';
+      let statusText = '';
+      if (isRunning) {
+        if (isWaiting) {
+          workState = 'waiting';
+          statusText = stageInfo.hasStage
+            ? `⏳ ${stageInfo.stageLabel}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : zh
+            ? `⏳ 等待你的确认${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : `⏳ Waiting for approval`;
+        } else if (isThinking) {
+          workState = 'thinking';
+          statusText = stageInfo.hasStage
+            ? `✦ ${stageInfo.stageLabel}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : zh
+            ? `✦ 思考中 · ${steps > 0 && steps <= 99 ? `${steps}步` : `第${calls || 1}轮`}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : `✦ Thinking · ${steps}`;
+        } else {
+          workState = 'working';
+          statusText = stageInfo.hasStage
+            ? `⚡ ${stageInfo.stageLabel}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : zh
+            ? `⚡ ${stageInfo.stageLabel || (subRunning ? `子代理协作 (${subRunning})` : '正在执行')}${steps > 0 && steps <= 99 ? ` · ${steps}步` : ''}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+            : `⚡ ${stageInfo.stageLabel || 'Working'} · ${steps}`;
+        }
+      } else if (crabState.taskDoneState === 'done') {
+        workState = 'done';
+        statusText = zh
+          ? `✓ 任务已完成${steps > 0 && steps <= 99 ? ` · 本轮${steps}步` : ''}${elapsedSec > 0 ? ` (${elapsedSec}s)` : ''}`
+          : `✓ Task completed${steps > 0 ? ` (${steps} steps)` : ''}`;
+      } else if (crabState.taskDoneState === 'error') {
+        workState = 'error';
+        statusText = zh ? `! 任务遇到异常` : `! Task warning`;
+      }
+
+      const primaryCid = String(info?.cascadeId || crabState.activeCascadeId || '');
+      let summaryTitle = '';
+      try {
+        const h = ensureHooks(true);
+        const sums = h?.store?.getState?.()?.trajectorySummaries?.summaries || {};
+        const sum = primaryCid ? unwrapTrajSummary(sums[primaryCid]) : null;
+        if (sum && typeof sum.summary === 'string' && sum.summary.trim()) {
+          summaryTitle = sum.summary.trim();
+        }
+      } catch {}
+      const primaryTitle = String(
+        summaryTitle ||
+          info?.activeTaskTitle ||
+          document.title?.replace(/\s*-\s*Antigravity.*$/i, '') ||
+          ''
+      ).trim();
+      const detailLines =
+        stageInfo.detailLines ||
+        recent
+          .map((s) => {
+            const icon = s.status === 1 || s.status === 2 ? '⟳ ' : s.status === 4 || s.status === 6 ? '! ' : '✓ ';
+            return icon + formatStepLabel(s, zh);
+          })
+          .filter(Boolean);
+      const primarySubTotal = Math.max(
+        subRunning,
+        Array.isArray(info?.subagents) ? info.subagents.length : 0,
+        Number(info?.subagentCount || 0)
+      );
+      const primaryTask =
+        primaryCid && statusText
+          ? {
+              id: primaryCid,
+              shortTitle: shortTitleLabel(primaryTitle, zh ? '当前会话' : 'Active'),
+              taskTitle: primaryTitle || (zh ? '当前对话任务' : 'Active Task'),
+              workState,
+              running: isRunning,
+              doneState: crabState.taskDoneState || '',
+              statusText,
+              steps,
+              elapsedSec,
+              agentMode: primarySubTotal > 0 ? 'multi' : 'single',
+              subagentRunning: subRunning,
+              subagentTotal: primarySubTotal,
+              detailLines,
+            }
+          : null;
+      const tasks = collectConcurrentDesktopTasks(primaryCid, primaryTask, zh);
+
+      let quotaUsedPct = -1;
+      let quotaSummary = '';
+      try {
+        if (!cachedQuotaData || Date.now() - lastQuotaFetchAt > 60000) {
+          fetchQuotaData(false)
+            .then(() => {
+              if (!destroyed) syncNekoToDesktop(crabState.lastInfo, false);
+            })
+            .catch(() => {});
+        }
+        const qInfo = buildQuotaDisplayInfo(info, crabState.anchor);
+        if (qInfo && qInfo.usedPct >= 0) {
+          quotaUsedPct = qInfo.usedPct;
+          quotaSummary = qInfo.summary;
+        }
+      } catch {}
+
+      const payload = {
+        __agCsNekoSync: {
+          enabled: cfg.mascot === 'crab' && cfg.desktopPet !== false,
+          pose,
+          mood,
+          workState,
+          running: isRunning,
+          doneState: crabState.taskDoneState || '',
+          statusText,
+          taskTitle: primaryTitle,
+          steps,
+          calls,
+          elapsedSec,
+          quotaUsedPct,
+          quotaSummary,
+          detailLines,
+          tasks,
+        },
+      };
+      const json = JSON.stringify(payload);
+      if (!force && json === crabState.lastTelemetryJson) return;
+      crabState.lastTelemetryJson = json;
+      send(json);
+    } catch {}
+  }
+
   function buildCrabNode() {
     const root = document.createElement('span');
-    root.className = 'ag-cs-crab';
+    root.className = 'ag-cs-crab ag-cs-neko';
     root.setAttribute('aria-hidden', 'true');
     root.setAttribute('data-ag-no-i18n', '');
+    root.setAttribute('data-ag-cs-mood', 'idle');
+    root.setAttribute('data-ag-cs-pose', crabState.poseMode);
+    const taskPanel = document.createElement('div');
+    taskPanel.className = 'ag-cs-neko-task';
+    taskPanel.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    taskPanel.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const actEl = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
+      const act = actEl ? actEl.getAttribute('data-act') : 'toggle';
+      if (act === 'dismiss') {
+        crabState.taskDoneState = '';
+        crabState.taskExpanded = false;
+        renderNekoTaskBubble(crabState.lastInfo);
+        syncNekoToDesktop(crabState.lastInfo, true);
+        return;
+      }
+      crabState.taskExpanded = !crabState.taskExpanded;
+      renderNekoTaskBubble(crabState.lastInfo);
+    });
+    root.appendChild(taskPanel);
+
+    const compactPrompt = document.createElement('div');
+    compactPrompt.className = 'ag-cs-neko-compact';
+    compactPrompt.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    compactPrompt.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const actEl = ev.target && ev.target.closest ? ev.target.closest('[data-compact-act]') : null;
+      const act = actEl ? actEl.getAttribute('data-compact-act') : '';
+      const cid = crabState.activeCascadeId || crabState.lastInfo?.cascadeId || '';
+      if (act === 'dismiss') {
+        const curPct = Math.round(crabState.lastCtxPctByCid.get(cid) || 80);
+        if (cid) crabState.compactDismissedMap.set(cid, curPct);
+        compactPrompt.removeAttribute('data-open');
+        return;
+      }
+      if (act === 'run') {
+        if (cid && crabState.compactSendingCid === cid && crabState.compactSendingUntil > Date.now()) return;
+        const ok = triggerAutoCompact(crabState.anchor);
+        if (ok) {
+          crabState.compactSendingCid = cid;
+          crabState.compactSendingUntil = Date.now() + 25000;
+          triggerNekoSquash(0.68);
+          showNekoBubble(
+            isZh() ? '收到！正在自动压缩当前会话喵~ ✦' : 'Got it! Compacting this conversation~ ✦',
+            3800,
+            { force: true, protectMs: 2600 }
+          );
+          if (crabState.anchor) renderNekoCompactPrompt(crabState.anchor, crabState.lastInfo);
+        }
+      }
+    });
+    root.appendChild(compactPrompt);
+
+    const bubble = document.createElement('span');
+    bubble.className = 'ag-cs-neko-bubble';
+    bubble.addEventListener('mouseenter', () => {
+      crabState.bubbleHovered = true;
+    });
+    bubble.addEventListener('mouseleave', () => {
+      crabState.bubbleHovered = false;
+      if (crabState.bubble && crabState.bubble.getAttribute('data-open') === '1' && !crabState.bubbleTimer) {
+        crabState.bubbleTimer = setTimeout(() => {
+          crabState.bubbleTimer = null;
+          if (!crabState.bubbleHovered) hideNekoBubble();
+        }, 1400);
+      }
+    });
+    bubble.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      hideNekoBubble();
+    });
+    root.appendChild(bubble);
+
     const sprite = document.createElement('span');
-    sprite.className = 'ag-cs-crab-sprite';
+    sprite.className = 'ag-cs-neko-stage';
     const strip = document.createElement('span');
-    strip.className = 'ag-cs-crab-strip';
+    strip.className = 'ag-cs-neko-body-wrap';
+    const img = document.createElement('img');
+    img.className = 'ag-cs-neko-img';
+    img.alt = '';
+    img.draggable = false;
+    const initSrc = (crabAssets.NEKO_POSES && crabAssets.NEKO_POSES.peek) || crabAssets.NEKO_DATA_URI;
+    if (initSrc) img.src = initSrc;
+    strip.appendChild(img);
+    const video = document.createElement('video');
+    video.className = 'ag-cs-neko-video';
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('loop', '');
+    video.setAttribute('autoplay', '');
+    video.setAttribute('playsinline', '');
+    strip.appendChild(video);
+    const fx = document.createElement('span');
+    fx.className = 'ag-cs-neko-fx';
+    fx.innerHTML = `<span class="ag-cs-neko-fx-think">✦</span><span class="ag-cs-neko-fx-sleep">Zzz</span><span class="ag-cs-neko-fx-happy">✦ ♥</span><span class="ag-cs-neko-fx-shy">♥</span><span class="ag-cs-neko-fx-error">!</span>`;
+    strip.appendChild(fx);
     sprite.appendChild(strip);
     root.appendChild(sprite);
 
     const hit = document.createElement('span');
-    hit.className = 'ag-cs-crab-hit';
+    hit.className = 'ag-cs-crab-hit ag-cs-neko-docked-hit';
     hit.addEventListener('pointerdown', (ev) => {
       if (ev.button !== 0) return;
+      closeNekoMenu();
       crabState.stage.quietSince = Date.now();
-      crabState.stage.press = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, lifted: false };
-      try {
-        hit.setPointerCapture(ev.pointerId);
-      } catch {}
-    });
-    hit.addEventListener('pointermove', (ev) => {
-      const p = crabState.stage.press;
-      if (!p || p.lifted || ev.pointerId !== p.id) return;
-      if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) < 4) return;
-      p.lifted = true;
-      crabState.stage.clicks = [];
-      crabState.stage.reaction = { key: 'drag', mode: 'loop', fresh: true };
-      stepCrab();
+      crabState.forcedMood = '';
+      crabState.stage.press = {
+        id: ev.pointerId,
+        x: ev.clientX,
+        y: ev.clientY,
+        lifted: false,
+      };
     });
     const endPress = (ev, allowPoke) => {
       const p = crabState.stage.press;
       if (!p || ev.pointerId !== p.id) return;
-      const lifted = p.lifted;
       crabState.stage.press = null;
-      if (lifted) {
-        crabState.stage.reaction = null;
-        stepCrab();
-        return;
-      }
       if (!allowPoke) return;
+      triggerNekoSquash(0.64);
       const now = Date.now();
       if (crabState.stage.clicks.length > 0 && now - crabState.stage.clicks[crabState.stage.clicks.length - 1] > 450) {
         crabState.stage.clicks = [];
@@ -2582,31 +4596,159 @@
       if (crabState.stage.clicks.length >= 4) {
         crabState.stage.clicks = [];
         crabState.stage.reaction = { key: 'tickle', mode: 'once', fresh: true };
+        showNekoBubble(getNekoLine('tickle'), 2800);
         stepCrab();
         return;
       }
-      const box = hit.getBoundingClientRect();
-      const key = ev.clientX - box.left < box.width / 2 ? 'poke-left' : 'poke-right';
+      const box = hit.getBoundingClientRect ? hit.getBoundingClientRect() : { left: 0, width: 94 };
+      const key = ev.clientX - box.left < (box.width || 94) / 2 ? 'poke-left' : 'poke-right';
       crabState.stage.reaction = { key, mode: 'once', fresh: true };
       stepCrab();
     };
     hit.addEventListener('pointerup', (ev) => endPress(ev, true));
     hit.addEventListener('pointercancel', (ev) => endPress(ev, false));
+    hit.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      if (crabState.floating) {
+        returnNekoHome();
+      }
+      showNekoQuotaBubble();
+    });
+    hit.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openNekoContextMenu(ev.clientX, ev.clientY);
+    });
     hit.addEventListener('click', (ev) => ev.stopPropagation());
     root.appendChild(hit);
-    return { root, sprite, strip };
+    return { root, sprite, strip, img, video, bubble, compactPrompt, taskPanel };
+  }
+
+  function stopTaskLivePoll() {
+    if (crabState.taskPollTimer) {
+      clearInterval(crabState.taskPollTimer);
+      crabState.taskPollTimer = null;
+    }
+  }
+
+  function ensureTaskLivePoll(activeCard, cascadeId) {
+    if (destroyed || !cascadeId) return;
+    crabState.activeCascadeId = cascadeId;
+    if (crabState.taskPollTimer) return;
+    crabState.taskPollTimer = setInterval(() => {
+      if (destroyed || !crabState.root || !crabState.anchor || !crabState.anchor.isConnected) {
+        stopTaskLivePoll();
+        return;
+      }
+      const cid = crabState.activeCascadeId || resolveCascadeId(crabState.anchor.closest?.('[data-testid="agent-input-box"]') || crabState.anchor);
+      if (!cid) {
+        stopTaskLivePoll();
+        return;
+      }
+      fetchActiveConvo(cid, true).then((fresh) => {
+        if (!destroyed && crabState.root && crabState.anchor && crabState.anchor.isConnected) {
+          syncCrab(crabState.anchor, fresh || crabState.lastInfo);
+        }
+      });
+    }, 800);
   }
 
   function unmountCrab() {
+    closeNekoMenu();
+    stopTaskLivePoll();
+    ensureBgLivePoll(false);
     if (crabState.stage.timer) clearTimeout(crabState.stage.timer);
+    if (crabState.bubbleTimer) clearTimeout(crabState.bubbleTimer);
+    if (crabState.quotaAnimTimer) clearTimeout(crabState.quotaAnimTimer);
+    if (crabState.chatterTimer) clearTimeout(crabState.chatterTimer);
+    if (crabState.roamTimer) clearTimeout(crabState.roamTimer);
+    if (crabState.userTypingTimer) clearTimeout(crabState.userTypingTimer);
+    if (crabState.idleDockTimer) clearTimeout(crabState.idleDockTimer);
+    if (crabState.idleConfirmTimer) clearTimeout(crabState.idleConfirmTimer);
+    crabState.idleDockTimer = null;
+    if (crabState.throwRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(crabState.throwRaf);
+    if (crabState.squashRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(crabState.squashRaf);
     if (crabState.stage.animation) crabState.stage.animation.cancel();
     if (crabState.root && crabState.root.parentElement) crabState.root.parentElement.removeChild(crabState.root);
     if (crabState.anchor) crabState.anchor.removeAttribute('data-ag-cs-crab-anchor');
     crabState.root = null;
     crabState.sprite = null;
     crabState.strip = null;
+    crabState.img = null;
+    crabState.video = null;
+    crabState.bubble = null;
+    crabState.compactPrompt = null;
+    crabState.taskPanel = null;
+    crabState.bubbleTimer = null;
+    crabState.bubbleVariant = '';
+    crabState.bubbleProtectedUntil = 0;
+    crabState.bubbleHovered = false;
+    crabState.quotaAnimTimer = null;
+    crabState.quotaAnimKey = '';
+    crabState.quotaAnimUntil = 0;
+    crabState.chatterTimer = null;
+    crabState.roamTimer = null;
+    crabState.idleConfirmTimer = null;
+    crabState.idleConfirmSince = 0;
+    crabState.throwRaf = 0;
+    crabState.squashRaf = 0;
+    crabState.throwing = false;
+    crabState.floating = false;
     crabState.anchor = null;
     crabState.stage = mascotCore.freshStage(Date.now());
+  }
+
+  function isConversationActuallyRunning(activeCard, activeInfo) {
+    // Blank new-conversation home page has no running conversation
+    const isHomeCard = Boolean(activeCard?.closest?.('.agy-home') && !activeCard?.closest?.('[data-testid="conversation-view"]'));
+    if (isHomeCard) return false;
+    if (activeInfo?.isRunning || Number(activeInfo?.pendingBgTasks || 0) > 0) return true;
+    try {
+      const h = ensureHooks(true);
+      const inputBox = activeCard?.closest?.('[data-testid="agent-input-box"]') || activeCard;
+      const cid = activeInfo?.cascadeId || resolveCascadeId(inputBox);
+      const nowMs = Date.now();
+      if (h && cid) {
+        const st = h.store?.getState?.();
+        const sums = st?.trajectorySummaries?.summaries || st?.cascadeTrajectorySummaries || {};
+        const sum = unwrapTrajSummary(sums[cid]);
+        if (sum && typeof sum === 'object' && isSummaryEntryRunning(sum, nowMs)) {
+          return true;
+        }
+        // Also check any running child subagent belonging to this conversation
+        for (const [subId, rawEntry] of Object.entries(sums)) {
+          if (subId === cid) continue;
+          const s = unwrapTrajSummary(rawEntry);
+          const meta = s.trajectoryMetadata || {};
+          if (meta.parentConversationId === cid || meta.rootConversationId === cid) {
+            if (isSummaryEntryRunning(s, nowMs)) {
+              return true;
+            }
+          }
+        }
+      }
+      const panels = document.querySelectorAll('[data-testid="running-items-panel"]');
+      for (const p of panels) {
+        if (String(p.className || '').includes('grid-rows-[1fr]')) {
+          return true;
+        }
+      }
+      const stopSel =
+        '[data-testid="stop-button"], [data-testid="cancel-cascade-button"], ' +
+        'button[aria-label*="Stop generating"], button[aria-label*="停止生成"]';
+      const cv = activeCard?.closest?.('[data-testid="conversation-view"]');
+      if (cv && cv.querySelector && cv.querySelector(stopSel)) {
+        return true;
+      }
+      if (activeCard && activeCard.querySelector && activeCard.querySelector(stopSel)) {
+        return true;
+      }
+    } catch {}
+    if (activeInfo && Number(activeInfo.turnSteps || 0) > 0 && !activeInfo.isRunning && !activeInfo.awaitingNextTurn) {
+      return false;
+    }
+    return false;
   }
 
   function syncCrab(activeCard, activeInfo) {
@@ -2620,28 +4762,168 @@
       crabState.root = built.root;
       crabState.sprite = built.sprite;
       crabState.strip = built.strip;
+      crabState.img = built.img;
+      crabState.video = built.video;
+      crabState.bubble = built.bubble;
+      crabState.compactPrompt = built.compactPrompt;
+      crabState.taskPanel = built.taskPanel;
       needsStep = true;
+      scheduleNekoChatter();
+      scheduleNekoRoam();
+      scheduleIdleDockRotation();
     }
-    if (crabState.root.parentElement !== activeCard) {
-      if (crabState.anchor) crabState.anchor.removeAttribute('data-ag-cs-crab-anchor');
+    crabState.anchor = activeCard;
+    if (crabState.floating) {
+      if (document.body && crabState.root.parentElement !== document.body) {
+        activeCard.removeAttribute('data-ag-cs-crab-anchor');
+        document.body.appendChild(crabState.root);
+      }
+    } else if (crabState.root.parentElement !== activeCard) {
       activeCard.setAttribute('data-ag-cs-crab-anchor', 'composer');
       activeCard.appendChild(crabState.root);
-      crabState.anchor = activeCard;
       needsStep = true;
     }
+
+    const inputBox = activeCard.closest?.('[data-testid="agent-input-box"]') || activeCard;
+    const isHomeCard = Boolean(activeCard.closest?.('.agy-home') && !activeCard.closest?.('[data-testid="conversation-view"]'));
+    const currentCid = isHomeCard ? '' : (activeInfo?.cascadeId || resolveCascadeId(inputBox) || '');
+
+    // When switching conversations (including opening a brand-new blank chat), immediately clear stale primary state
+    // so previous chat's done/running badge never flickers or leaks onto the new conversation.
+    if (currentCid !== (crabState.activeCascadeId || '')) {
+      crabState.activeCascadeId = currentCid;
+      crabState.wasRunning = false;
+      crabState.idleConfirmSince = 0;
+      if (crabState.idleConfirmTimer) {
+        clearTimeout(crabState.idleConfirmTimer);
+        crabState.idleConfirmTimer = null;
+      }
+      stopTaskLivePoll();
+      crabState.taskDoneState = '';
+      crabState.taskExpanded = false;
+      crabState.taskStartedAt = 0;
+      crabState.taskStartStepCount = null;
+      crabState.lastTaskSteps = 0;
+      crabState.lastTaskElapsedSec = 0;
+    }
+
+    // Preserve last valid trajectory info for the same conversation if transient call passed null
+    let mergedInfo = isHomeCard ? null : activeInfo;
+    if (!mergedInfo && currentCid && crabState.lastInfo && crabState.lastInfo.cascadeId === currentCid) {
+      mergedInfo = { ...crabState.lastInfo, isRunning: false };
+    }
+
     const now = Date.now();
-    const isRunning = Boolean(activeInfo?.isRunning);
-    if (crabState.wasRunning && !isRunning) {
-      mascotCore.takeMoment(crabState.stage, activeInfo?.hasError ? 'error' : 'attention', now);
-      needsStep = true;
+    const rawRunning = isConversationActuallyRunning(activeCard, mergedInfo);
+    const effectiveInfo = mergedInfo
+      ? { ...mergedInfo, cascadeId: mergedInfo.cascadeId || currentCid, isRunning: rawRunning }
+      : currentCid
+      ? { cascadeId: currentCid, isRunning: rawRunning, steps: 0, turnSteps: 0, calls: 0, recentSteps: [] }
+      : null;
+
+    if (rawRunning) {
+      crabState.idleConfirmSince = 0;
+      if (crabState.idleConfirmTimer) {
+        clearTimeout(crabState.idleConfirmTimer);
+        crabState.idleConfirmTimer = null;
+      }
+      if (!crabState.wasRunning) {
+        crabState.taskStartedAt = now;
+        crabState.taskDoneState = '';
+        crabState.lastTaskSteps = 0;
+        const initTotal = Number(effectiveInfo?.steps || 0);
+        crabState.taskStartStepCount = initTotal > 0 ? Math.max(0, initTotal - 1) : 0;
+        crabState.wasRunning = true;
+      }
+      const rawTotalNow = Number(effectiveInfo?.steps || 0);
+      const curSteps =
+        typeof crabState.taskStartStepCount === 'number' && rawTotalNow > crabState.taskStartStepCount
+          ? rawTotalNow - crabState.taskStartStepCount
+          : resolveTurnSteps(effectiveInfo);
+      if (curSteps > (crabState.lastTaskSteps || 0)) {
+        crabState.lastTaskSteps = curSteps;
+      }
+      if (currentCid) ensureTaskLivePoll(activeCard, currentCid);
+      crabState.stage.quietSince = now;
+      crabState.stage.asleep = false;
+    } else if (crabState.wasRunning) {
+      // Between tool calls there can be a 2-5s gap before the next plannerResponse starts.
+      // Never declare done using stale info: force a fresh trajectory fetch before confirming completion.
+      const waitMs = effectiveInfo?.awaitingNextTurn ? 5500 : 2400;
+      if (!crabState.idleConfirmSince) {
+        crabState.idleConfirmSince = now;
+        if (crabState.idleConfirmTimer) clearTimeout(crabState.idleConfirmTimer);
+        crabState.idleConfirmTimer = setTimeout(() => {
+          crabState.idleConfirmTimer = null;
+          if (destroyed || !crabState.root || !crabState.anchor) return;
+          const cid = currentCid || crabState.activeCascadeId;
+          if (cid) {
+            fetchActiveConvo(cid, true).then((fresh) => {
+              if (!destroyed && crabState.root && crabState.anchor) {
+                syncCrab(crabState.anchor, fresh || crabState.lastInfo);
+              }
+            });
+          } else {
+            syncCrab(crabState.anchor, crabState.lastInfo);
+          }
+        }, waitMs + 150);
+      }
+      if (now - crabState.idleConfirmSince >= waitMs) {
+        stopTaskLivePoll();
+        crabState.wasRunning = false;
+        crabState.idleConfirmSince = 0;
+        if (crabState.idleConfirmTimer) {
+          clearTimeout(crabState.idleConfirmTimer);
+          crabState.idleConfirmTimer = null;
+        }
+        const finalSteps = Math.max(resolveTurnSteps(effectiveInfo), crabState.lastTaskSteps || 0);
+        crabState.lastTaskSteps = finalSteps;
+        crabState.lastTaskElapsedSec = crabState.taskStartedAt
+          ? Math.max(1, Math.round((now - crabState.taskStartedAt) / 1000))
+          : 0;
+        // Only show "task completed" when we actually observed real steps (> 0) or an explicit error
+        if (effectiveInfo?.hasError) {
+          crabState.taskDoneState = 'error';
+          mascotCore.takeMoment(crabState.stage, 'error', now);
+          triggerNekoSquash(0.6);
+          needsStep = true;
+        } else if (finalSteps > 0) {
+          crabState.taskDoneState = 'done';
+          mascotCore.takeMoment(crabState.stage, 'attention', now);
+          triggerNekoSquash(0.6);
+          needsStep = true;
+        } else {
+          crabState.taskDoneState = '';
+        }
+      }
+    } else {
+      stopTaskLivePoll();
     }
-    crabState.wasRunning = isRunning;
-    const nextLevel = mascotCore.levelFromActiveInfo(activeInfo);
+
+    const effectiveRunningForUi = rawRunning || crabState.wasRunning;
+    const uiInfo = effectiveInfo ? { ...effectiveInfo, isRunning: effectiveRunningForUi } : effectiveInfo;
+    crabState.lastInfo = uiInfo || null;
+    const nextLevel = mascotCore.levelFromActiveInfo(uiInfo);
     if (!crabState.stage.level || crabState.stage.level.state !== nextLevel.state) {
       crabState.stage.level = nextLevel;
       needsStep = true;
     }
     if (needsStep || !crabState.stage.current) stepCrab();
+    else if (crabState.root && crabState.video) {
+      syncNekoDockVideo(crabState.root.getAttribute('data-ag-cs-mood') || 'idle');
+      applyNekoBoxStyle();
+    }
+    if (uiInfo?.isRunning && uiInfo?.isWaiting) {
+      const waitCid = uiInfo.cascadeId || currentCid || '';
+      if (waitCid !== crabState.lastWaitingAlertCid || now - crabState.lastWaitingAlertAt > 45000) {
+        crabState.lastWaitingAlertCid = waitCid;
+        crabState.lastWaitingAlertAt = now;
+        showNekoBubble(getNekoLine('waiting'), 4200);
+      }
+    }
+    renderNekoCompactPrompt(activeCard, uiInfo);
+    renderNekoTaskBubble(uiInfo);
+    syncNekoToDesktop(uiInfo);
   }
 
   // ── Per-Turn Token Badges (.ag-cs-turn-bar) & Surround HUD Bars ────────
@@ -2658,6 +4940,8 @@
 
     const readStepIndexFromObj = (obj) => {
       if (!obj || typeof obj !== 'object') return -1;
+      const srcIdx = obj.metadata?.sourceTrajectoryStepInfo?.stepIndex;
+      if (typeof srcIdx === 'number' && Number.isInteger(srcIdx) && srcIdx >= 0) return srcIdx;
       for (const k of ['stepIndex', 'startStepIndex', 'firstStepIndex', 'index']) {
         const v = obj[k];
         if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return v;
@@ -2691,22 +4975,30 @@
               const cIdx = readStepIndexFromObj(p.container);
               if (cIdx >= 0) foundStepIdx = cIdx;
             }
+            let hasCheckpoint = false;
+            let hasPlannerResp = false;
+            let checkpointStepIdx = -1;
             for (const s of p.container.steps) {
-              if (foundStepIdx < 0) {
-                const sIdx = readStepIndexFromObj(s);
-                if (sIdx >= 0) foundStepIdx = sIdx;
+              const sIdx = readStepIndexFromObj(s);
+              if (foundStepIdx < 0 && sIdx >= 0) foundStepIdx = sIdx;
+              if (s?.step?.case === 'checkpoint') {
+                hasCheckpoint = true;
+                if (sIdx >= 0) checkpointStepIdx = sIdx;
+              } else if (s?.step?.case === 'plannerResponse') {
+                hasPlannerResp = true;
               }
               if (foundStepTimeSec === 0 && s?.metadata?.createdAt && typeof usageCore.tsSec === 'function') {
                 const sec = usageCore.tsSec(s.metadata.createdAt);
                 if (sec > 0) foundStepTimeSec = sec;
               }
-              if (foundStepIdx >= 0 && foundStepTimeSec > 0) break;
             }
             return {
               container: foundContainer,
               cascadeId: foundCascadeId,
               stepIndex: foundStepIdx,
               stepTimeSec: foundStepTimeSec,
+              isCheckpointOnly: hasCheckpoint && !hasPlannerResp,
+              checkpointStepIdx,
             };
           }
         }
@@ -2899,7 +5191,7 @@
       }
       activeSet.add(bar);
 
-      const dSign = t.ctxDelta >= 0 ? '+' : '';
+      const dSign = t.ctxDelta >= 0 ? '+' : '-';
       const dCls = t.ctxDelta >= 15000 ? 'is-high' : t.ctxDelta >= 5000 ? 'is-mid' : 'is-low';
       const shortModel = String(t.model || data.lastModel || '').replace(/\s*\([^)]*\)\s*/g, '').trim() || 'Model';
       const barKey = `${t.turn}|${t.ctxUsed}|${t.ctxDelta}|${t.output}|${t.thinking}|${t.toolCalls || 0}|${t.speed}|${t.cacheHitPct}|${t.subagentCalls}|${lang}`;
@@ -2910,7 +5202,7 @@
           <span class="ag-cs-tb-model">${escapeHtml(shortModel)}</span>
           <span class="ag-cs-tb-sep">·</span>
           <span class="ag-cs-tb-item">${escapeHtml(ui.ctxShort || 'Ctx')} <strong>${formatCompactK(t.ctxUsed)}</strong></span>
-          <span class="ag-cs-tb-delta ${dCls}">${dSign}${formatCompactK(t.ctxDelta)}</span>
+          <span class="ag-cs-tb-delta ${dCls}">${dSign}${formatCompactK(Math.abs(t.ctxDelta))}</span>
           <span class="ag-cs-tb-sep">·</span>
           <span class="ag-cs-tb-item">${escapeHtml(ui.outShort || 'Out')} <strong>${formatCompactK(t.output)}</strong></span>
           ${t.thinking > 0 ? `<span class="ag-cs-tb-item is-think">${escapeHtml(ui.thinkShort || 'Think')} ${formatCompactK(t.thinking)}</span>` : ''}
@@ -2921,6 +5213,51 @@
         `;
       }
     };
+
+    const renderCheckpointBadgeOnHost = (host, cp) => {
+      if (!host || !cp) return;
+      let bar = host.querySelector(':scope > .ag-cs-turn-bar') || host.querySelector('.ag-cs-turn-bar');
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.className = 'ag-cs-turn-bar';
+        bar.setAttribute('data-ag-no-i18n', '');
+        bar.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const latest = activeTrajCache.get(data.cascadeId)?.data || data;
+          openContextPopover(bar, latest, 'breakdown');
+        });
+        host.appendChild(bar);
+      }
+      activeSet.add(bar);
+
+      const isZh = lang === 'zh-CN' || lang === 'zh-TW' || lang === 'yue';
+      const label = isZh ? '会话已压缩' : lang === 'ja' ? '会話圧縮済み' : 'Compacted';
+      const afterPrefix = cp.isEstimated ? '~' : '';
+      const beforeStr = cp.beforeCtx > 0 ? formatCompactK(cp.beforeCtx) : '';
+      const afterStr = `${afterPrefix}${formatCompactK(cp.afterCtx || 0)}`;
+      const savedStr = cp.savedTokens > 0 ? `-${formatCompactK(cp.savedTokens)}` : '';
+      const barKey = `cp|${cp.stepIdx}|${cp.beforeCtx}|${cp.afterCtx}|${cp.savedTokens}|${cp.isEstimated ? 1 : 0}|${lang}`;
+      if (bar.getAttribute('data-ag-cs-turn-key') !== barKey) {
+        bar.setAttribute('data-ag-cs-turn-key', barKey);
+        bar.innerHTML = `
+          <span class="ag-cs-tb-idx">🗜️ ${escapeHtml(label)}</span>
+          <span class="ag-cs-tb-sep">·</span>
+          <span class="ag-cs-tb-item">${escapeHtml(ui.ctxShort || 'Ctx')} ${beforeStr ? `${beforeStr} → ` : ''}<strong>${afterStr}</strong></span>
+          ${savedStr ? `<span class="ag-cs-tb-delta is-low">${savedStr}</span>` : ''}
+        `;
+      }
+    };
+
+    const checkpointList = Array.isArray(data.checkpoints) ? data.checkpoints : [];
+    const checkpointTargets = [];
+    const turnTargets = [];
+    for (const target of mainTargets) {
+      if (target.fiberInfo?.isCheckpointOnly) {
+        checkpointTargets.push(target);
+      } else {
+        turnTargets.push(target);
+      }
+    }
 
     const hasIndexedTurns = turns.some((td) => td.userStepIdx >= 0);
     const matchTurnByFiber = (fiberInfo) => {
@@ -2953,7 +5290,7 @@
 
     // Prefer exact Fiber step/timestamp binding; keep only the final host per turn
     const turnToHost = new Map();
-    const matchedTargets = mainTargets.map((target) => ({ target, turn: matchTurnByFiber(target.fiberInfo) }));
+    const matchedTargets = turnTargets.map((target) => ({ target, turn: matchTurnByFiber(target.fiberInfo) }));
     const anyFiberMatched = matchedTargets.some((m) => m.turn !== null);
 
     if (anyFiberMatched && matchedTargets.every((m) => m.turn !== null)) {
@@ -2968,7 +5305,17 @@
           usedTurnIds.add(m.turn.turn);
         }
       }
-      const remainingTargets = matchedTargets.filter((m) => !m.turn).map((m) => m.target);
+      const remainingTargets = matchedTargets
+        .filter((m) => {
+          if (m.turn) return false;
+          const fi = m.target.fiberInfo;
+          // If Fiber already has an exact stepIndex or timestamp that matched no turn,
+          // this DOM node is a non-LLM step (e.g. /compact checkpoint) — never attach a stale historical turn.
+          if (fi && hasIndexedTurns && typeof fi.stepIndex === 'number' && fi.stepIndex >= 0) return false;
+          if (fi && typeof fi.stepTimeSec === 'number' && fi.stepTimeSec > 0) return false;
+          return true;
+        })
+        .map((m) => m.target);
       const remainingTurns = turns.filter((t) => !usedTurnIds.has(t.turn));
       const count = Math.min(remainingTargets.length, remainingTurns.length);
       for (let i = 0; i < count; i++) {
@@ -2977,9 +5324,9 @@
         if (target && t) turnToHost.set(t.turn, { host: target.host, turn: t });
       }
     } else {
-      const count = Math.min(mainTargets.length, turns.length);
+      const count = Math.min(turnTargets.length, turns.length);
       for (let i = 0; i < count; i++) {
-        const target = mainTargets[mainTargets.length - count + i];
+        const target = turnTargets[turnTargets.length - count + i];
         const t = turns[turns.length - count + i];
         if (target && t) turnToHost.set(t.turn, { host: target.host, turn: t });
       }
@@ -2987,6 +5334,18 @@
 
     for (const entry of turnToHost.values()) {
       renderBadgeOnHost(entry.host, entry.turn);
+    }
+
+    if (checkpointTargets.length > 0 && checkpointList.length > 0) {
+      for (let i = 0; i < checkpointTargets.length; i++) {
+        const target = checkpointTargets[i];
+        const cpIdx = target.fiberInfo?.checkpointStepIdx ?? -1;
+        const cp =
+          (cpIdx >= 0 ? checkpointList.find((c) => c.stepIdx === cpIdx) : null) ||
+          checkpointList[Math.min(i, checkpointList.length - 1)] ||
+          checkpointList[checkpointList.length - 1];
+        if (cp) renderCheckpointBadgeOnHost(target.host, cp);
+      }
     }
 
     // Also render badges for any subagent conversation turns visible in DOM
@@ -3241,10 +5600,14 @@
   function resolveModelEffortContext(modelBtn, badgeEl) {
     const readLiveBadgeEffort = (el) => {
       if (!el) return '';
-      const rawTxt = (el.textContent || '').trim().toLowerCase();
-      const m = rawTxt.match(/\b(extra|xhigh|high|med(?:ium)?|low|max)\b/);
-      if (m) return m[1].startsWith('med') ? 'medium' : m[1];
-      return (el.getAttribute('data-ag-cs-effort') || rawTxt).trim().toLowerCase();
+      const rawTxt = (el.textContent || '').trim();
+      const parsed = effortCore.normalizeEffortBadgeText(rawTxt);
+      if (parsed) return parsed;
+      const attr = (el.getAttribute('data-ag-cs-effort') || '').trim().toLowerCase();
+      if (attr) return attr;
+      const btn = el.closest ? el.closest('[data-testid="model-selector-trigger"]') : null;
+      const aria = btn ? btn.getAttribute('aria-label') || '' : '';
+      return effortCore.parseModelLabelEffort(aria).effort || '';
     };
     let badgeEffort = readLiveBadgeEffort(badgeEl);
     if (!badgeEffort && modelBtn) {
@@ -4565,14 +6928,11 @@
         const spans = modelBtn.querySelectorAll('span');
         const sub = spans.length >= 2 ? spans[spans.length - 1] : null;
         if (sub && sub.childElementCount === 0) {
-          const txt = (sub.textContent || '').trim().toLowerCase();
-          let level = '';
-          if (/\bmax\b/.test(txt)) level = 'max';
-          else if (/\bxhigh\b/.test(txt)) level = 'xhigh';
-          else if (/\bhigh\b/.test(txt)) level = 'high';
-          else if (/\bmed(?:ium)?\b/.test(txt)) level = 'medium';
-          else if (/\blow\b/.test(txt)) level = 'low';
-          else if (/\bextra\b/.test(txt)) level = 'extra';
+          let level = effortCore.normalizeEffortBadgeText(sub.textContent);
+          if (!level) {
+            const aria = modelBtn.getAttribute('aria-label') || '';
+            level = effortCore.parseModelLabelEffort(aria).effort || '';
+          }
           if (level) {
             if (sub.getAttribute('data-ag-cs-effort') !== level) sub.setAttribute('data-ag-cs-effort', level);
             sub.classList.add('ag-cs-effort-badge');
@@ -4591,7 +6951,7 @@
 
       if (!footer || cfg.inlineStats === false || cfg.composerRestyle === false) {
         card
-          .querySelectorAll('.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip')
+          .querySelectorAll('.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-quota-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip')
           .forEach((n) => n.remove());
         continue;
       }
@@ -4606,8 +6966,12 @@
             updateFooterWidgets(card, footer, fresh);
             syncSurroundHud(card, footer, fresh);
             if (card === primaryCard) {
-              syncCrab(primaryCard, fresh);
-              syncTurnBadges(fresh);
+              const stillHome = Boolean(card.closest('.agy-home') && !card.closest('[data-testid="conversation-view"]'));
+              const curCardCid = stillHome ? '' : resolveCascadeId(inputBox);
+              if (!stillHome && (!curCardCid || curCardCid === cascadeId)) {
+                syncCrab(primaryCard, fresh);
+                syncTurnBadges(fresh);
+              }
             }
             if (
               openPopover &&
@@ -4623,11 +6987,7 @@
           }
         });
       }
-      const needQuotaPoll =
-        cfg.ringMode === 'quota' ||
-        cfg.hudBottomBar === true ||
-        Boolean(openPopover && openPopover.isConnected && activeHudTab === 'quotas');
-      if (needQuotaPoll) {
+      {
         const needQuotaRefresh = !cachedQuotaData || Date.now() - lastQuotaFetchAt >= 25000;
         const qProm = fetchQuotaData(false);
         if (needQuotaRefresh && qProm && typeof qProm.then === 'function') {
@@ -4656,9 +7016,10 @@
     card._agCsLastData = d;
     let statsBtn = footer.querySelector('.ag-cs-inline-stats');
     let ringBtn = footer.querySelector('.ag-cs-context-ring');
+    let quotaRingBtn = footer.querySelector('.ag-cs-quota-ring');
 
-    // Bottom-right circular ring displays REMAINING capacity percentage (usageCore.computeRingTelemetry)
-    const { ring, draftEst } = getRingTelemetryForCard(card, d);
+    // Bottom-right context ring (0% -> 100% used, fixed neutral gray) + dual concentric quota ring (outer=5h, inner=weekly)
+    const { ring, draftEst, activeQuota } = getRingTelemetryForCard(card, d);
 
     const turnsTxt = `${d.calls} ${ui.callsShortUnit || 'calls'} ${d.steps} ${ui.stepsUnit || 'steps'}`;
     const speedVal = Number(d.displaySpeed || d.lastSpeed || 0);
@@ -4706,57 +7067,191 @@
       if (cacheEl) cacheEl.textContent = cacheTxt;
     }
 
-    const pct = Math.max(0, Math.min(100, ring.pct));
+    const pct = Math.max(0, Math.min(100, ring.contextUsedPct));
     const r = 5.5;
     const circ = 2 * Math.PI * r;
     const dash = ((pct / 100) * circ).toFixed(2);
-    const color = ring.color;
-    const pctRound = ring.pctRound;
+    const color = ring.contextColor || '#71717a';
+    const pctRound = Math.round(pct);
     const remStr = formatCompactK(ring.remainingTokens);
     const maxStr = formatCompactK(ring.maxTokens);
     const usedStr = formatCompactK(ring.usedTokens);
     const ringTitle =
       typeof ui.ringTooltip === 'function'
         ? ui.ringTooltip(remStr, maxStr, ring.contextRemainingPct.toFixed(1), usedStr, ring.contextUsedPct.toFixed(1), ring.quotaRemainingPct)
-        : `Remaining ${remStr} / ${maxStr} (${ring.contextRemainingPct.toFixed(1)}%) · Used ${usedStr} (${ring.contextUsedPct.toFixed(1)}%)`;
+        : `Used ${usedStr} / ${maxStr} (${ring.contextUsedPct.toFixed(1)}%) · Remaining ${remStr} (${ring.contextRemainingPct.toFixed(1)}%)`;
     const lowCtxRingAttr =
-      ring.mode === 'context' && (d.calls > 0 || ring.usedTokens > 0) && ring.contextRemainingPct <= 20
+      (d.calls > 0 || ring.usedTokens > 0) && ring.contextRemainingPct <= 20
         ? ring.contextRemainingPct <= 10
           ? 'danger'
           : 'warn'
         : '';
-    const ringKey = `${ring.mode}|${lowCtxRingAttr}|${pctRound}|${dash}|${color}|${ringTitle}`;
+    const ringKey = `context-used|${lowCtxRingAttr}|${pctRound}|${dash}|${color}|${ringTitle}`;
 
     if (!ringBtn) {
       ringBtn = document.createElement('button');
       ringBtn.type = 'button';
       ringBtn.className = 'ag-cs-context-ring';
       ringBtn.setAttribute('data-ag-no-i18n', '');
-      ringBtn.setAttribute('data-ring-mode', ring.mode);
+      ringBtn.setAttribute('data-ring-mode', 'context');
       if (lowCtxRingAttr) ringBtn.setAttribute('data-ctx-low', lowCtxRingAttr);
       ringBtn.setAttribute('title', ringTitle);
-      ringBtn.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--ag-cs-heat-empty)" stroke-width="2.2"/><circle class="ag-cs-ring-fill" cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.2" stroke-dasharray="${dash} ${circ.toFixed(2)}" stroke-linecap="round"/></svg><span>${pctRound}%</span>`;
+      ringBtn.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="rgba(128, 128, 128, 0.22)" stroke-width="2.2"/><circle class="ag-cs-ring-fill" cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.2" stroke-dasharray="${dash} ${circ.toFixed(2)}" stroke-linecap="round"/></svg>`;
       ringBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        const targetTab = cfg.ringMode === 'quota' ? 'quotas' : 'breakdown';
-        openContextPopover(ringBtn, resolveCardConvoData(card, d), targetTab);
+        openContextPopover(ringBtn, resolveCardConvoData(card, d), 'breakdown');
       });
       footer.appendChild(ringBtn);
       ringBtn.setAttribute('data-ag-cs-ring-key', ringKey);
     } else if (ringBtn.getAttribute('data-ag-cs-ring-key') !== ringKey) {
       ringBtn.setAttribute('data-ag-cs-ring-key', ringKey);
-      ringBtn.setAttribute('data-ring-mode', ring.mode);
+      ringBtn.setAttribute('data-ring-mode', 'context');
       if (lowCtxRingAttr) ringBtn.setAttribute('data-ctx-low', lowCtxRingAttr);
       else ringBtn.removeAttribute('data-ctx-low');
       ringBtn.setAttribute('title', ringTitle);
       const fillCircle = ringBtn.querySelector('.ag-cs-ring-fill');
-      const pctSpan = ringBtn.querySelector('span');
       if (fillCircle) {
         fillCircle.setAttribute('stroke', color);
         fillCircle.setAttribute('stroke-dasharray', `${dash} ${circ.toFixed(2)}`);
       }
-      if (pctSpan) pctSpan.textContent = `${pctRound}%`;
     }
+
+    // Single quota ring: 5h remaining % with dynamic color + side percentage label
+    const has5h = typeof activeQuota?.b5h?.remainingPct === 'number';
+    const hasWeek = typeof activeQuota?.bWeek?.remainingPct === 'number';
+    const hasAnyQuota = has5h || hasWeek || typeof activeQuota?.effectiveRemainingPct === 'number';
+    const pct5h = has5h
+      ? Math.max(0, Math.min(100, activeQuota.b5h.remainingPct))
+      : typeof activeQuota?.effectiveRemainingPct === 'number'
+      ? Math.max(0, Math.min(100, activeQuota.effectiveRemainingPct))
+      : 0;
+    const pctWeek = hasWeek
+      ? Math.max(0, Math.min(100, activeQuota.bWeek.remainingPct))
+      : typeof activeQuota?.effectiveRemainingPct === 'number'
+      ? Math.max(0, Math.min(100, activeQuota.effectiveRemainingPct))
+      : 0;
+    const quotaDash = hasAnyQuota ? ((pct5h / 100) * circ).toFixed(2) : '0.00';
+    const quotaColor = !hasAnyQuota ? '#71717a' : pct5h <= 10 ? '#dc3c3d' : pct5h <= 30 ? '#fbb315' : '#257de0';
+    const quotaLabel = hasAnyQuota ? `${Math.round(pct5h)}%` : '--';
+    const reset5hStr = fmtBucketReset(activeQuota?.b5h, lang);
+    const resetWeekStr = fmtBucketReset(activeQuota?.bWeek, lang);
+    const quotaTitle = hasAnyQuota
+      ? `${activeQuota?.groupName ? activeQuota.groupName + ' · ' : ''}${isZh() ? '5h 剩余' : '5h rem'}: ${Math.round(pct5h)}%${reset5hStr ? ` (${reset5hStr})` : ''} · ${isZh() ? '周剩余' : 'Weekly rem'}: ${Math.round(pctWeek)}%${resetWeekStr ? ` (${resetWeekStr})` : ''}`
+      : isZh()
+      ? '5h 配额剩余（加载中）'
+      : '5h quota remaining (loading)';
+    const quotaKey = `${quotaLabel}|${quotaDash}|${quotaColor}|${quotaTitle}`;
+
+    if (!quotaRingBtn) {
+      quotaRingBtn = document.createElement('button');
+      quotaRingBtn.type = 'button';
+      quotaRingBtn.className = 'ag-cs-quota-ring';
+      quotaRingBtn.setAttribute('data-ag-no-i18n', '');
+      quotaRingBtn.setAttribute('title', quotaTitle);
+      quotaRingBtn.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="rgba(128, 128, 128, 0.22)" stroke-width="2.2"/><circle class="ag-cs-quota-fill" cx="8" cy="8" r="${r}" fill="none" stroke="${quotaColor}" stroke-width="2.2" stroke-dasharray="${quotaDash} ${circ.toFixed(2)}" stroke-linecap="round"/></svg><span>${quotaLabel}</span>`;
+      quotaRingBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        openContextPopover(quotaRingBtn, resolveCardConvoData(card, d), 'quotas');
+      });
+      footer.appendChild(quotaRingBtn);
+      quotaRingBtn.setAttribute('data-ag-cs-quota-key', quotaKey);
+    } else if (quotaRingBtn.getAttribute('data-ag-cs-quota-key') !== quotaKey) {
+      quotaRingBtn.setAttribute('data-ag-cs-quota-key', quotaKey);
+      quotaRingBtn.setAttribute('title', quotaTitle);
+      const fillEl = quotaRingBtn.querySelector('.ag-cs-quota-fill');
+      const labelEl = quotaRingBtn.querySelector('span');
+      if (fillEl) {
+        fillEl.setAttribute('stroke', quotaColor);
+        fillEl.setAttribute('stroke-dasharray', `${quotaDash} ${circ.toFixed(2)}`);
+      }
+      if (labelEl) labelEl.textContent = quotaLabel;
+    }
+  }
+
+  async function writeTextToClipboard(text) {
+    if (!navigator?.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      return false;
+    }
+    try {
+      await navigator.clipboard.writeText(String(text || ''));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function diagnoseHostCompat() {
+    const has = (sel) => {
+      try {
+        return Boolean(document.querySelector(sel));
+      } catch {
+        return false;
+      }
+    };
+    let hooks = null;
+    try {
+      hooks = ensureHooks(true);
+    } catch {}
+    const i18nStats = domTranslator && typeof domTranslator.stats === 'function' ? domTranslator.stats() : null;
+    return {
+      pluginVersion: VERSION,
+      codeHash: CODE_HASH || '',
+      language: getLang(),
+      path: typeof location !== 'undefined' ? String(location.pathname || '') : '',
+      anchors: {
+        home: has('.agy-home, [data-testid="home-greeting"]'),
+        composer: has('[data-testid="agent-input-box"], .surface-composer-card'),
+        modelSelector: has('[data-testid="model-selector-trigger"]'),
+        sidebar: has('[data-testid="conversation-list-sidebar"], [data-testid="sidebar-navigation-items"]'),
+        conversationView: has('[data-testid="conversation-view"]'),
+        settingsSection: Boolean(document.getElementById(SETTINGS_SEC_ID)),
+      },
+      runtime: {
+        fiberBridge: Boolean(hooks && (hooks.svc || hooks.store || hooks.trajCtx)),
+        i18nActive: Boolean(domTranslator),
+        i18nTexts: i18nStats ? i18nStats.texts : 0,
+        i18nAttrs: i18nStats ? i18nStats.attrs : 0,
+        hasExtraI18n: Boolean(runtimeInitConfig && runtimeInitConfig.i18nExtra),
+        hasPanel: Boolean(panelEl && panelEl.isConnected),
+        hasCrab: Boolean(crabState.root && crabState.root.isConnected),
+      },
+    };
+  }
+
+  function scanMissingI18n() {
+    const compat = diagnoseHostCompat();
+    const items = domTranslator && typeof domTranslator.missing === 'function' ? domTranslator.missing(document) : [];
+    return {
+      version: VERSION,
+      language: compat.language,
+      missingCount: items.length,
+      missing: items,
+      compat,
+    };
+  }
+
+  function buildCompatReport(scan = scanMissingI18n()) {
+    const extraTemplate = {};
+    if (scan.language && scan.language !== 'en' && scan.missing.length) {
+      const dictSample = {};
+      for (const item of scan.missing) {
+        const cleanKey = item.startsWith('@') ? item.replace(/^@[^:]+:\s*/, '') : item;
+        if (cleanKey && !Object.prototype.hasOwnProperty.call(dictSample, cleanKey)) {
+          dictSample[cleanKey] = '';
+        }
+      }
+      extraTemplate[scan.language] = { dict: dictSample };
+    }
+    return JSON.stringify(
+      {
+        compat: scan.compat,
+        missingCount: scan.missingCount,
+        missing: scan.missing,
+        i18nExtraTemplate: extraTemplate,
+      },
+      null,
+      2
+    );
   }
 
   // ── Settings Panel Integration ─────────────────────────────────────────
@@ -5105,12 +7600,47 @@
     };
 
     const headWrap = mkEl('div', 'flex flex-col gap-1');
-    const headRow = mkEl('div', 'flex items-center justify-between');
+    const headRow = mkEl('div', 'flex items-center justify-between gap-2');
     const headTitleWrap = mkEl('div', 'flex items-center gap-1.5');
     const h3 = mkEl('h3', 'm-0 text-sm font-medium');
-    h3.textContent = 'AGY Claude Style (agy-claude-style)';
+    h3.textContent = 'AGY Pet (agy-pet)';
     headTitleWrap.appendChild(h3);
     headRow.appendChild(headTitleWrap);
+
+    const diagBtn = mkEl('span', 'ag-cs-settings-diag-btn');
+    diagBtn.setAttribute('role', 'button');
+    diagBtn.setAttribute('tabindex', '0');
+    diagBtn.setAttribute('data-ag-cs-diag', 'scan');
+    diagBtn.textContent = ui.compatScanBtn || 'Scan & Copy Diag';
+    diagBtn.title = ui.compatScanTitle || 'Scan untranslated UI strings & host hook health, then copy report';
+    const runDiagCopy = () => {
+      const scan = scanMissingI18n();
+      const reportText = buildCompatReport(scan);
+      const curUi = uiText(getLang());
+      writeTextToClipboard(reportText).then((clipOk) => {
+        if (!diagBtn.isConnected) return;
+        clearTimeout(diagBtn._agCsFeedbackTimer);
+        diagBtn.setAttribute('data-action-state', clipOk ? 'ok' : 'error');
+        diagBtn.textContent = clipOk
+          ? `${curUi.copiedBtnLabel || '✓ Copied'} (${scan.missingCount} ${curUi.compatMissingWord || 'missing'})`
+          : curUi.actionFailedLabel || '✕ Failed';
+        diagBtn._agCsFeedbackTimer = setTimeout(() => {
+          if (!diagBtn.isConnected) return;
+          const resetUi = uiText(getLang());
+          diagBtn.removeAttribute('data-action-state');
+          diagBtn.textContent = resetUi.compatScanBtn || 'Scan & Copy Diag';
+        }, 2000);
+      });
+    };
+    diagBtn.addEventListener('click', runDiagCopy);
+    diagBtn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        runDiagCopy();
+      }
+    });
+    headRow.appendChild(diagBtn);
+
     headWrap.appendChild(headRow);
     sec.appendChild(headWrap);
 
@@ -5179,7 +7709,7 @@
     if (!el || !el.closest) return false;
     return Boolean(
       el.closest(
-        '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-crab, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-footer-chip, #' +
+        '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-crab, .ag-cs-neko-menu, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-quota-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-footer-chip, #' +
           SETTINGS_SEC_ID +
           ', #ag-claude-style-css'
       )
@@ -5290,6 +7820,9 @@
   }
 
   function onDocClick(ev) {
+    if (crabState.menuEl && (!ev?.target?.closest || !ev.target.closest('.ag-cs-neko-menu'))) {
+      closeNekoMenu();
+    }
     const effortBadge = findClickedEffortBadge(ev);
     if (effortBadge) {
       ev.stopPropagation();
@@ -5316,6 +7849,7 @@
 
   function onDocKeyDown(ev) {
     if (ev.key === 'Escape') {
+      closeNekoMenu();
       if (openPopover) closeContextPopover();
       if (openEffortPop) closeEffortPopover();
       return;
@@ -5416,6 +7950,29 @@
     queueSmoothCaret(isTyping, immediate);
     if (type === 'input') {
       if (ev?.target?.closest && ev.target.closest('[data-testid="agent-input-box"]')) {
+        if (crabState.root) {
+          const now = Date.now();
+          crabState.userTypingUntil = now + 1100;
+          crabState.stage.quietSince = now;
+          if (crabState.stage.asleep) {
+            crabState.stage.asleep = false;
+            stepCrab();
+          } else if ((crabState.root.getAttribute('data-ag-cs-mood') || 'idle') === 'idle' && crabState.stage.current) {
+            showCrabSheet(crabState.stage.current, now);
+          }
+          crabState.root.setAttribute('data-ag-cs-user-typing', '1');
+          if (crabState.userTypingTimer) clearTimeout(crabState.userTypingTimer);
+          crabState.userTypingTimer = setTimeout(() => {
+            crabState.userTypingTimer = null;
+            crabState.userTypingUntil = 0;
+            if (crabState.root) {
+              crabState.root.removeAttribute('data-ag-cs-user-typing');
+              if ((crabState.root.getAttribute('data-ag-cs-mood') || 'idle') === 'idle' && crabState.stage.current) {
+                showCrabSheet(crabState.stage.current, Date.now());
+              }
+            }
+          }, 1150);
+        }
         scheduleSync();
       }
       if (openPopover && openPopover.isConnected) {
@@ -5586,6 +8143,8 @@
       }
       if (document.querySelector('[data-testid="conversation-view"], [data-testid="agent-input-box"]')) {
         scheduleSync();
+      } else if (cfg.desktopPet !== false && typeof window.__agCsNekoBinding === 'function') {
+        syncNekoToDesktop(crabState.lastInfo, false);
       }
     }, Math.max(1000, Number(cfg.pollIntervalMs) || 2500));
 
@@ -5635,6 +8194,109 @@
       const data = (cid && activeTrajCache.get(cid)?.data) || card?._agCsLastData || null;
       if (a) openContextPopover(a, data, tab || 'breakdown');
     },
+    activateConversation(targetCid, targetTitle, opts) {
+      try {
+        const allowRouterFallback = !opts || opts.allowRouterFallback !== false;
+        const cleanCid = String(targetCid || '').trim();
+        const cleanTitle = String(targetTitle || '').replace(/…$/, '').trim();
+        const targetPath = cleanCid ? `/c/${cleanCid}` : '';
+        const hash = String(location.hash || '');
+        // Never navigate while a freshly opened window is still bootstrapping its one-time #t= auth token
+        if (/(?:^|[#&])t=/.test(hash)) {
+          return { matched: false, pending: 'auth-bootstrap' };
+        }
+        if (typeof document !== 'undefined' && document.readyState === 'loading') {
+          return { matched: false, pending: 'doc-loading' };
+        }
+        if (targetPath && (location.pathname === targetPath || location.pathname.startsWith(`${targetPath}/`))) {
+          return { matched: true, alreadyActive: true };
+        }
+        // 1. Direct SPA <a href="/c/<cid>"> link click (instant zero-reload navigation preserving ?project=...)
+        const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+        if (cleanCid) {
+          for (const a of links) {
+            const href = String(a.getAttribute('href') || '');
+            if (
+              href === targetPath ||
+              href.startsWith(`${targetPath}?`) ||
+              href.startsWith(`${targetPath}#`) ||
+              href.endsWith(targetPath) ||
+              href.includes(`${targetPath}?`) ||
+              href.includes(`${targetPath}#`)
+            ) {
+              a.click();
+              return { matched: true, by: 'href' };
+            }
+          }
+          const byCascadeRow = document.querySelector(`[data-testid="conversation-row-sidebar"][data-cascade-id="${cleanCid}"]`);
+          if (byCascadeRow) {
+            const innerLink = byCascadeRow.querySelector('a[href]');
+            if (innerLink) innerLink.click();
+            else byCascadeRow.click();
+            return { matched: true, by: 'href' };
+          }
+        }
+        // 2. Match sidebar row by title and click its inner <a href>
+        const rows = Array.from(document.querySelectorAll('[data-testid="conversation-row-sidebar"]'));
+        if (cleanTitle) {
+          for (const row of rows) {
+            const txt = String(row.textContent || '').replace(/\s+/g, ' ').trim();
+            if (txt && (txt.includes(cleanTitle) || (cleanTitle.length >= 6 && txt.includes(cleanTitle.slice(0, 10))))) {
+              const innerLink = row.querySelector('a[href]');
+              if (innerLink) innerLink.click();
+              else row.click();
+              return { matched: true, by: 'title-link' };
+            }
+          }
+        }
+        // 3. TanStack Router SPA navigation via React Fiber context (only after app shell & sidebar are truly ready)
+        const readyAnchors = Array.from(
+          document.querySelectorAll(
+            '[data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="conversation-row-sidebar"], [data-testid="home-greeting"]'
+          )
+        );
+        if (readyAnchors.length === 0) {
+          return { matched: false, pending: 'bootstrapping' };
+        }
+        if (!allowRouterFallback) {
+          return { matched: false, pending: 'waiting-sidebar' };
+        }
+        if (links.length === 0 && rows.length === 0 && !document.querySelector('[data-testid="agent-input-box"], [data-testid="conversation-view"]')) {
+          return { matched: false, pending: 'waiting-sidebar' };
+        }
+        if (cleanCid && cleanCid.length >= 16 && /^[a-zA-Z0-9_-]+$/.test(cleanCid)) {
+          const candidates = readyAnchors.slice();
+          const rootChild = document.querySelector('#root *');
+          if (rootChild && !candidates.includes(rootChild)) candidates.push(rootChild);
+          for (const el of candidates) {
+            const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+            for (let f = fk && el[fk], d = 0; f && d < 120; f = f.return, d++) {
+              for (let c = f.dependencies && f.dependencies.firstContext; c; c = c.next) {
+                const v = c.memoizedValue;
+                if (v && typeof v === 'object' && typeof v.navigate === 'function' && v.latestLocation) {
+                  if (v.state && v.state.status === 'pending') {
+                    return { matched: false, pending: 'router-pending' };
+                  }
+                  const navOpts = { to: '/c/$cascadeId', params: { cascadeId: cleanCid } };
+                  try {
+                    const curSearch = typeof location !== 'undefined' && location.search ? new URLSearchParams(location.search) : null;
+                    const curProj = curSearch ? curSearch.get('project') : '';
+                    if (curProj) navOpts.search = { project: curProj };
+                  } catch {}
+                  v.navigate(navOpts);
+                  return { matched: true, by: 'router' };
+                }
+              }
+            }
+          }
+        }
+        return { matched: false, pending: 'not-found' };
+      } catch {}
+      return { matched: false };
+    },
+    diagnoseHostCompat,
+    scanMissingI18n,
+    buildCompatReport,
     getState() {
       return {
         cfg: { ...cfg },
@@ -5680,7 +8342,7 @@
       });
       document
         .querySelectorAll(
-          '.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, .ag-cs-perf-backdrop, #' + SETTINGS_SEC_ID
+          '.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-quota-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, .ag-cs-perf-backdrop, #' + SETTINGS_SEC_ID
         )
         .forEach((el) => el.remove());
       const html = document.documentElement;

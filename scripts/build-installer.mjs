@@ -46,32 +46,43 @@ function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION }
     const manifestJson = JSON.stringify(manifest, null, 2) + '\n';
     fs.writeFileSync(path.join(stageDir, 'manifest.json'), manifestJson, 'utf8');
 
-    const watcherOut = path.join(stageDir, 'agy-claude-style-watcher.exe');
+    const watcherOut = path.join(stageDir, 'agy-pet-watcher.exe');
+    const watcherManifest = path.join(ROOT_DIR, 'installer', 'watcher', 'app.manifest');
     const commonMiniJson = path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs');
     const commonCdpClient = path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs');
+    const commonAgyFast = path.join(ROOT_DIR, 'installer', 'common', 'AgyFastHelper.cs');
     const watcherMain = path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs');
+    const watcherDesktopNeko = path.join(ROOT_DIR, 'installer', 'watcher', 'DesktopNeko.cs');
 
     execFileSync(csc, [
       '/nologo',
       '/utf8output',
       '/codepage:65001',
+      '/platform:x64',
       '/target:winexe',
       '/optimize+',
       `/win32icon:${icoPath}`,
+      `/win32manifest:${watcherManifest}`,
       `/out:${watcherOut}`,
       '/r:System.dll',
       '/r:System.Core.dll',
+      '/r:System.Drawing.dll',
       '/r:System.Management.dll',
       '/r:System.Net.Http.dll',
+      '/r:System.Windows.Forms.dll',
       commonMiniJson,
       commonCdpClient,
+      commonAgyFast,
       watcherMain,
+      watcherDesktopNeko,
     ], { stdio: 'inherit' });
 
     const activeConfigFile = resolveActiveConfigFile(configPath);
 
     const payloadFiles = [
-      { name: 'agy-claude-style-watcher.exe', data: fs.readFileSync(watcherOut) },
+      { name: 'agy-pet-watcher.exe', data: fs.readFileSync(watcherOut) },
+      { name: 'WebView2Loader.dll', data: fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'WebView2Loader.dll')) },
+      { name: 'pet-ui.html', data: fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'pet-ui.html')) },
       { name: 'manifest.json', data: Buffer.from(manifestJson, 'utf8') },
       { name: 'style.css', data: fs.readFileSync(path.join(ROOT_DIR, 'style.css')) },
       { name: 'config.json', data: fs.readFileSync(activeConfigFile) },
@@ -81,6 +92,50 @@ function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION }
         data: fs.readFileSync(path.join(ROOT_DIR, part)),
       })),
     ];
+
+    const watcherAssetsDir = path.join(ROOT_DIR, 'installer', 'watcher', 'assets');
+    if (fs.existsSync(watcherAssetsDir)) {
+      for (const fname of fs.readdirSync(watcherAssetsDir)) {
+        const full = path.join(watcherAssetsDir, fname);
+        if (fs.statSync(full).isFile()) {
+          payloadFiles.push({
+            name: `assets/${fname}`,
+            data: fs.readFileSync(full),
+          });
+        }
+      }
+    }
+
+    const webmOptDir = path.join(ROOT_DIR, 'neko-studio', 'webm-opt');
+    if (fs.existsSync(webmOptDir)) {
+      for (const fname of fs.readdirSync(webmOptDir)) {
+        if (/\.webm$/i.test(fname)) {
+          payloadFiles.push({
+            name: `anims/webm/${fname}`,
+            data: fs.readFileSync(path.join(webmOptDir, fname)),
+          });
+        }
+      }
+    }
+
+    const agyFastSrcDir = path.join(ROOT_DIR, 'plugins', 'agy-fast');
+    if (fs.existsSync(agyFastSrcDir)) {
+      const walkPluginFiles = (dir, relBase) => {
+        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, ent.name);
+          const rel = relBase ? `${relBase}/${ent.name}` : ent.name;
+          if (ent.isDirectory()) {
+            walkPluginFiles(full, rel);
+          } else if (ent.isFile()) {
+            payloadFiles.push({
+              name: `plugins/agy-fast/${rel}`,
+              data: fs.readFileSync(full),
+            });
+          }
+        }
+      };
+      walkPluginFiles(agyFastSrcDir, '');
+    }
 
     const payloadZip = path.join(stageDir, 'payload.zip');
     fs.writeFileSync(payloadZip, buildZip(payloadFiles));
@@ -109,6 +164,7 @@ function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION }
       '/r:System.Windows.Forms.dll',
       commonMiniJson,
       commonCdpClient,
+      commonAgyFast,
       setupMain,
     ], { stdio: 'inherit' });
 

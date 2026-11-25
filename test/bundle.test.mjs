@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
@@ -422,7 +425,7 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
     assert.equal(generalPanel.querySelector('#ag-cs-settings-sec'), null);
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
-    assert.equal(settingsSec.querySelector('h3')?.textContent, 'AGY Claude Style (agy-claude-style)');
+    assert.equal(settingsSec.querySelector('h3')?.textContent, 'AGY Pet (agy-pet)');
     const settingGroups = settingsSec.querySelectorAll('.ag-cs-settings-group');
     assert.equal(settingGroups.length, 3);
     assert.deepEqual(
@@ -1258,7 +1261,9 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
     await new Promise((r) => setTimeout(r, 80));
 
     const ringBtn = footer.querySelector('.ag-cs-context-ring');
+    const quotaBtn = footer.querySelector('.ag-cs-quota-ring');
     assert.ok(ringBtn, 'Expected bottom-right context ring widget');
+    assert.ok(quotaBtn, 'Expected bottom-right dual quota ring widget');
 
     ringBtn.dispatch('click');
     let pop = body.querySelector('.ag-cs-ctx-popover');
@@ -1270,7 +1275,7 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
     await new Promise((r) => setTimeout(r, 80));
     doc.hidden = false;
 
-    ringBtn.dispatch('click');
+    quotaBtn.dispatch('click');
     pop = body.querySelector('.ag-cs-ctx-popover');
     assert.equal(pop?.querySelector('.is-active')?.getAttribute('data-ctx-tab'), 'quotas');
 
@@ -1531,18 +1536,21 @@ test('new conversation renders bottom-right ring and inline tokens info on home 
     assert.equal(res.status, 'ok');
     await new Promise((r) => setTimeout(r, 60));
 
-    // On .agy-home before sending, ring shows quota (42%) and inline stats + surround HUDs are mounted!
+    // On .agy-home before sending, context ring starts at 0% used, dual quota ring shows 5h remaining (42%)!
     const statsBtn = footer.querySelector('.ag-cs-inline-stats');
     const ringBtn = footer.querySelector('.ag-cs-context-ring');
+    const quotaBtn = footer.querySelector('.ag-cs-quota-ring');
     const chip = footer.querySelector('.ag-cs-hud-footer-chip');
     const topBar = card.querySelector('.ag-cs-hud-top-bar');
     assert.ok(statsBtn, 'Expected inline tokens info on new conversation home view');
     assert.ok(ringBtn, 'Expected bottom-right ring on new conversation home view');
+    assert.ok(quotaBtn, 'Expected bottom-right dual quota ring on new conversation home view');
     assert.ok(chip, 'Expected optional footer chip when enabled on new conversation');
     assert.ok(topBar, 'Expected optional top HUD bar when enabled on new conversation');
     assert.equal(statsBtn.textContent, '0 轮 0 步 · 0 tok · 0% 缓存');
-    assert.equal(ringBtn.getAttribute('data-ring-mode'), 'quota');
-    assert.equal(ringBtn.querySelector('span')?.textContent, '42%');
+    assert.equal(ringBtn.getAttribute('data-ring-mode'), 'context');
+    assert.equal(ringBtn.querySelector('span'), null);
+    assert.equal(quotaBtn.querySelector('span')?.textContent, '42%');
 
     // Typing a draft in new conversation updates inline tokens estimate live
     editorEl.textContent = '帮我修复新建对话下未显示圆环及tokens信息的问题';
@@ -1574,7 +1582,7 @@ test('new conversation renders bottom-right ring and inline tokens info on home 
     assert.ok(footer.querySelector('.ag-cs-inline-stats'), 'Expected inline stats during Turn 1 before generatorMetadata');
     assert.ok(footer.querySelector('.ag-cs-context-ring'), 'Expected ring during Turn 1 before generatorMetadata');
     assert.equal(footer.querySelector('.ag-cs-inline-stats')?.textContent, '0 轮 2 步 · ~64 tok · 0% 缓存');
-    assert.equal(footer.querySelector('.ag-cs-context-ring span')?.textContent, '42%');
+    assert.equal(footer.querySelector('.ag-cs-quota-ring span')?.textContent, '42%');
 
     // Part C: Once Turn 1 completes its first LLM call, stats & ring update in-place and click opens latest data
     currentStatus = 1;
@@ -2134,7 +2142,7 @@ test('ring and popover stay live despite static trajectorySummaries and non-root
 
     const ringBtn = footer.querySelector('.ag-cs-context-ring');
     assert.ok(ringBtn);
-    assert.equal(ringBtn.querySelector('span')?.textContent, '96%');
+    assert.match(ringBtn.getAttribute('title') || '', /96\.1%/);
 
     // Trajectory grows to >50% context used (140K / 256K -> 45% remaining) while trajectorySummaries stays frozen!
     currentTraj = {
@@ -2168,7 +2176,7 @@ test('ring and popover stay live despite static trajectorySummaries and non-root
     for (const fn of intervals) fn();
     await new Promise((r) => setTimeout(r, 50));
     assert.ok(trajectoryFetchCount >= 2, 'Expected poll after TTL to re-fetch trajectory despite static summary');
-    assert.equal(ringBtn.querySelector('span')?.textContent, '45%');
+    assert.match(ringBtn.getAttribute('title') || '', /45\.3%/);
 
     // 2. Trajectory grows again to 75% used (192K / 256K -> 25% remaining); clicking ring refreshes popover immediately
     currentTraj = {
@@ -3173,8 +3181,10 @@ test('remote (cloud) conversation populates Token HUD, top bar, turn badges, and
 
     // Inline stats reflects real remote calls, steps, speed, total tokens & cache hit
     assert.match(statsBtn.textContent, /^2 轮 5 步 · 200 tok\/s · 101\.4k tok · 80% 缓存$/);
-    // Ring stays in quota mode (72%) while Top HUD bar consistently shows context % & 1.05M window!
-    assert.equal(ringBtn.querySelector('span')?.textContent, '72%');
+    // Dual quota ring shows 72% while Top HUD bar consistently shows context % & 1.05M window!
+    const quotaBtn = footer.querySelector('.ag-cs-quota-ring');
+    assert.ok(quotaBtn, 'Expected bottom-right dual quota ring');
+    assert.equal(quotaBtn.querySelector('span')?.textContent, '72%');
     assert.ok(topBar.innerHTML.includes('剩余 95%'), `Expected top bar context remaining 95%, got ${topBar.innerHTML}`);
     assert.ok(topBar.innerHTML.includes('/ 1.05M'), `Expected top bar 1.05M window, got ${topBar.innerHTML}`);
     assert.ok(topBar.innerHTML.includes('已用 54.3K'), `Expected top bar used 54.3K, got ${topBar.innerHTML}`);
@@ -3430,7 +3440,7 @@ test('fallback to createAgentStateProviderForConvo when getCascadeTrajectory thr
     assert.equal(getCascadeAttempts, 1, 'Should attempt getCascadeTrajectory once then remember cloud-only failure');
     assert.ok(tempProviderDisposed >= 1, 'Temporary agentStateProvider must be disposed after snapshot');
     assert.match(footer.querySelector('.ag-cs-inline-stats')?.textContent || '', /^1 轮 2 步 · 150 tok\/s · 30\.3k tok · 60% 缓存$/);
-    assert.equal(footer.querySelector('.ag-cs-context-ring span')?.textContent, '97%');
+    assert.match(footer.querySelector('.ag-cs-context-ring')?.getAttribute('title') || '', /97\.\d%/);
 
     vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
   } finally {
@@ -3521,6 +3531,10 @@ test('hudBottomBar triggers quota fetch in context mode, low-context triggers /c
         const acts = Array.from(this._html.matchAll(/data-ctx-act="([^"]+)"/g));
         for (const m of acts) {
           this.appendChild(makeEl('button', { className: 'ag-cs-ctx-act-btn', attrs: { 'data-ctx-act': m[1] } }));
+        }
+        const compactActs = Array.from(this._html.matchAll(/data-compact-act="([^"]+)"/g));
+        for (const m of compactActs) {
+          this.appendChild(makeEl('button', { className: 'ag-cs-neko-compact-btn', attrs: { 'data-compact-act': m[1] } }));
         }
         const mSpan = /<span>([^<]*)<\/span>/.exec(this._html);
         if (mSpan) this.appendChild(makeEl('span', { text: mSpan[1] }));
@@ -3647,6 +3661,26 @@ test('hudBottomBar triggers quota fetch in context mode, low-context triggers /c
       };
     },
   };
+  let submittedCompactItems = null;
+  activeEd.__reactFiber$test = {
+    memoizedProps: {
+      handleSubmit: async (items) => {
+        submittedCompactItems = items;
+      },
+      slashCommandItems: [
+        {
+          title: 'compact',
+          info: {
+            $typeName: 'exa.codeium_common_pb.SlashCommandInfo',
+            name: 'compact',
+            type: 1,
+            icon: 'collapse_all',
+          },
+        },
+      ],
+    },
+    return: null,
+  };
   activeBox.__reactFiber$test = {
     memoizedProps: { cascadeId, store: fakeRootStore, getCascadeTrajectory: fakeSvc.getCascadeTrajectory },
     dependencies: { firstContext: { memoizedValue: fakeSvc, next: null } },
@@ -3731,6 +3765,27 @@ test('hudBottomBar triggers quota fetch in context mode, low-context triggers /c
     compactBtn.dispatch('click');
     assert.equal(activeEd.textContent, '/compact');
     assert.equal(otherEd.textContent, 'untouched other composer');
+
+    // 4b. Dock neko double-click shows quota bubble (5h/weekly + tier line) and >=80% context shows clickable auto-compact prompt
+    const nekoHit = card.querySelector('.ag-cs-crab-hit');
+    const nekoBubble = card.querySelector('.ag-cs-neko-bubble');
+    const nekoCompact = card.querySelector('.ag-cs-neko-compact');
+    assert.ok(nekoHit && nekoBubble && nekoCompact, 'Expected dock neko hit, bubble, and compact prompt');
+    assert.equal(nekoCompact.getAttribute('data-open'), '1');
+    assert.equal(nekoCompact.getAttribute('data-level'), 'warn');
+
+    nekoHit.dispatch('dblclick');
+    assert.equal(nekoBubble.getAttribute('data-open'), '1');
+    assert.equal(nekoBubble.getAttribute('data-variant'), 'quota');
+    assert.match(nekoBubble.textContent, /5h额度：已用 35% · 剩余 65%/);
+
+    const runCompactBtn = nekoCompact.querySelector('[data-compact-act="run"]');
+    assert.ok(runCompactBtn);
+    nekoCompact.dispatch('click', { target: runCompactBtn });
+    assert.ok(Array.isArray(submittedCompactItems), 'Expected auto-compact click to invoke handleSubmit');
+    assert.equal(submittedCompactItems[0]?.chunk?.value?.scopeItem?.case, 'slashCommand');
+    assert.equal(submittedCompactItems[0]?.chunk?.value?.scopeItem?.value?.info?.name, 'compact');
+    assert.equal(nekoCompact.getAttribute('data-level'), 'sending');
 
     // 5. 3-way loadSettings merge keeps local UI preference (hudCompact=true) when external config changes only palette
     const savedMap = JSON.parse(storage.getItem('agClaudeStyle.settings.v1') || '{}');
@@ -4275,3 +4330,498 @@ test('inject expression enters sidecar-lite mode on plugin://swarm-- iframe with
   assert.equal(sandbox.window.__agClaudeStyle, undefined);
   assert.equal(sandbox.globalThis.__agCsSidecarCore, undefined);
 });
+
+test('activateConversation matches href with query params, sidebar title links, router fiber, alreadyActive, and guards auth bootstrap without hard reload', () => {
+  const clicked = [];
+  const assigned = [];
+  const navigated = [];
+  const mkNode = (tag, attrs = {}, text = '') => {
+    const children = [];
+    const attrMap = new Map(Object.entries(attrs));
+    const node = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      children,
+      childNodes: children,
+      style: { setProperty() {}, removeProperty() {} },
+      classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+      textContent: text,
+      appendChild(c) { children.push(c); c.parentNode = node; return c; },
+      remove() {},
+      contains: () => false,
+      closest: () => null,
+      addEventListener() {},
+      removeEventListener() {},
+      getAttribute(k) { return attrMap.has(k) ? attrMap.get(k) : null; },
+      setAttribute(k, v) { attrMap.set(k, String(v)); },
+      removeAttribute(k) { attrMap.delete(k); },
+      hasAttribute(k) { return attrMap.has(k); },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
+      querySelectorAll(sel) {
+        const out = [];
+        const parts = sel.split(',').map((s) => s.trim());
+        const matchOne = (c, s) => {
+          if (s === 'a[href*="/c/"]') return c.tagName === 'A' && String(c.getAttribute('href') || '').includes('/c/');
+          if (s === 'a[href]') return c.tagName === 'A' && c.hasAttribute('href');
+          if (s.startsWith('[data-testid="') && s.endsWith('"]')) {
+            return c.getAttribute('data-testid') === s.slice(14, -2);
+          }
+          if (s.startsWith('#') && !s.includes(' ')) return c.getAttribute('id') === s.slice(1);
+          return false;
+        };
+        const walk = (n) => {
+          for (const c of n.children || []) {
+            if (parts.some((p) => matchOne(c, p))) out.push(c);
+            walk(c);
+          }
+        };
+        walk(node);
+        return out;
+      },
+      querySelector(sel) { return node.querySelectorAll(sel)[0] || null; },
+    };
+    return node;
+  };
+
+  const html = mkNode('html');
+  const head = mkNode('head');
+  const body = mkNode('body');
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const linkWithQuery = mkNode('a', { href: '/c/0c83c0f5-7ca5-4cfe-b284-5505b2177a9a?project=5da3550e-f36b-4364-bca8-0091e8aa3559' });
+  linkWithQuery.click = () => clicked.push('href-query');
+  body.appendChild(linkWithQuery);
+
+  const row = mkNode('div', { 'data-testid': 'conversation-row-sidebar' }, '排版优化效果问题反馈任务');
+  const rowLink = mkNode('a', { href: '/c/other-conv-id' }, '排版优化效果问题反馈任务');
+  rowLink.click = () => clicked.push('title-link');
+  row.appendChild(rowLink);
+  body.appendChild(row);
+
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    createElement: (t) => mkNode(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const loc = {
+    protocol: 'https:',
+    host: '127.0.0.1:57040',
+    pathname: '/',
+    hash: '',
+    href: 'https://127.0.0.1:57040/',
+    assign(next) { assigned.push(next); },
+  };
+
+  const timers = new Set();
+  const sandbox = {
+    console,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: loc,
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  try {
+    vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    const api = sandbox.window.__agClaudeStyle;
+
+    // 0. Guard one-time #t= auth bootstrap hash — never click or hard-reload
+    loc.hash = '#t=9d20ee07884d6d80bca661d9efbf5755';
+    const r0 = api.activateConversation('0c83c0f5-7ca5-4cfe-b284-5505b2177a9a', '排版优化效果问题反馈');
+    assert.deepEqual({ ...r0 }, { matched: false, pending: 'auth-bootstrap' });
+    assert.deepEqual(clicked, []);
+    assert.deepEqual(assigned, []);
+    loc.hash = '';
+
+    // 1. Query-string href match
+    const r1 = api.activateConversation('0c83c0f5-7ca5-4cfe-b284-5505b2177a9a', '排版优化效果问题反馈');
+    assert.deepEqual({ ...r1 }, { matched: true, by: 'href' });
+    assert.deepEqual(clicked, ['href-query']);
+
+    // 2. Title-link fallback when cid link isn't present
+    const r2 = api.activateConversation('missing-id-1234567890', '排版优化效果问题反馈');
+    assert.deepEqual({ ...r2 }, { matched: true, by: 'title-link' });
+    assert.deepEqual(clicked, ['href-query', 'title-link']);
+
+    // 3. No hard location.assign when link/title/router aren't ready yet
+    const r3 = api.activateConversation('abcdef12-3456-7890-abcd-ef1234567890', '不存在的标题');
+    assert.deepEqual({ ...r3 }, { matched: false, pending: 'not-found' });
+    assert.deepEqual(assigned, []);
+
+    // 4. TanStack Router SPA navigation via React Fiber context
+    row['__reactFiber$test'] = {
+      dependencies: {
+        firstContext: {
+          memoizedValue: {
+            latestLocation: { pathname: '/' },
+            navigate(opts) { navigated.push(opts); },
+          },
+        },
+      },
+      return: null,
+    };
+    const rWait = api.activateConversation('abcdef12-3456-7890-abcd-ef1234567890', '不存在的标题', { allowRouterFallback: false });
+    assert.deepEqual({ ...rWait }, { matched: false, pending: 'waiting-sidebar' });
+    assert.deepEqual(navigated, []);
+
+    const rRouter = api.activateConversation('abcdef12-3456-7890-abcd-ef1234567890', '不存在的标题');
+    assert.deepEqual({ ...rRouter }, { matched: true, by: 'router' });
+    assert.deepEqual(JSON.parse(JSON.stringify(navigated)), [{ to: '/c/$cascadeId', params: { cascadeId: 'abcdef12-3456-7890-abcd-ef1234567890' } }]);
+    assert.deepEqual(assigned, []);
+
+    // 5. alreadyActive check
+    loc.pathname = '/c/abcdef12-3456-7890-abcd-ef1234567890';
+    const r4 = api.activateConversation('abcdef12-3456-7890-abcd-ef1234567890', '');
+    assert.deepEqual({ ...r4 }, { matched: true, alreadyActive: true });
+
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('analyzeActiveConversation keeps task running when background task is suspended and finishes only after SYSTEM_MESSAGE wakeup', () => {
+  const usageCore = require('../usage-core.js');
+  const suspendedSteps = [
+    { step: { case: 'userInput', value: { items: [{ text: '<USER_REQUEST>run long job</USER_REQUEST>' }] } }, status: 3 },
+    {
+      step: {
+        case: 'runCommand',
+        value: {
+          commandLine: 'python train.py',
+          combinedOutput: { full: 'Tool is running as a background task with task id: 0665f53a/task-1158' },
+        },
+      },
+      // Background task step itself stays status === 2 (RUNNING) even after completion
+      status: 2,
+    },
+    {
+      step: {
+        case: 'viewFile',
+        value: {
+          content: 'const re = /running as a background task with task id:\\s*<id>/;',
+        },
+      },
+      status: 3,
+    },
+    {
+      step: {
+        case: 'plannerResponse',
+        value: { response: 'Job started in background (running as a background task with task id: <id>), waiting for completion.' },
+      },
+      status: 3,
+    },
+  ];
+  const res1 = usageCore.analyzeActiveConversation({ steps: suspendedSteps });
+  assert.equal(res1.pendingBgTasks, 1);
+  assert.equal(res1.isRunning, true);
+
+  const completedSteps = [
+    ...suspendedSteps,
+    {
+      step: {
+        case: 'userInput',
+        value: {
+          items: [
+            {
+              text: '<SYSTEM_MESSAGE>\n[Message] sender=0665f53a/task-1158 priority=MESSAGE_PRIORITY_HIGH content=Task id "0665f53a/task-1158" finished with result:\nOK\n</SYSTEM_MESSAGE>',
+            },
+          ],
+        },
+      },
+      status: 3,
+    },
+    {
+      step: {
+        case: 'plannerResponse',
+        value: { response: 'Background job finished!' },
+      },
+      status: 3,
+    },
+  ];
+  const res2 = usageCore.analyzeActiveConversation({ steps: completedSteps });
+  assert.equal(res2.pendingBgTasks, 0);
+  assert.equal(res2.isRunning, false);
+  assert.equal(res2.recentSteps.some((s) => s.status === 1 || s.status === 2), false);
+});
+
+test('analyzeActiveConversation ignores recovered intermediate tool errors and only flags terminal error', () => {
+  const usageCore = require('../usage-core.js');
+  const recoveredSteps = [
+    { step: { case: 'userInput', value: { items: [{ text: '<USER_REQUEST>edit files</USER_REQUEST>' }] } }, status: 3 },
+    { step: { case: 'codeAction', value: {} }, status: 4 },
+    { step: { case: 'plannerResponse', value: { toolCalls: [{ name: 'edit_file' }] } }, status: 3 },
+    { step: { case: 'codeAction', value: {} }, status: 3 },
+    { step: { case: 'plannerResponse', value: { response: 'All edits succeeded after retry.' } }, status: 3 },
+  ];
+  const rRecovered = usageCore.analyzeActiveConversation({ steps: recoveredSteps });
+  assert.equal(rRecovered.hasError, false);
+  assert.equal(rRecovered.isRunning, false);
+
+  const terminalErrSteps = [
+    { step: { case: 'userInput', value: { items: [{ text: '<USER_REQUEST>edit files</USER_REQUEST>' }] } }, status: 3 },
+    { step: { case: 'codeAction', value: {} }, status: 4 },
+  ];
+  const rTerminal = usageCore.analyzeActiveConversation({ steps: terminalErrSteps });
+  assert.equal(rTerminal.hasError, true);
+});
+
+test('diagnoseHostCompat, scanMissingI18n, and i18nExtra hot-refresh via refreshConfig work seamlessly', () => {
+  const FILTER_ACCEPT = 1;
+  const FILTER_REJECT = 2;
+  const FILTER_SKIP = 3;
+  const SHOW_ELEMENT = 1;
+  const SHOW_TEXT = 4;
+
+  function makeText(text) {
+    return {
+      nodeType: 3,
+      nodeValue: String(text),
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      childNodes: [],
+      children: [],
+    };
+  }
+  function makeEl(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const childNodes = [];
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      id: opts.id || attrs.get('id') || '',
+      style: { _p: {}, setProperty(k, v) { this._p[k] = String(v); }, getPropertyValue(k) { return this._p[k] || ''; }, removeProperty(k) { delete this._p[k]; } },
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      childNodes,
+      get children() { return childNodes.filter((c) => c.nodeType === 1); },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      append(...nodes) {
+        for (const n of nodes) {
+          const item = typeof n === 'string' ? makeText(n) : n;
+          item.parentElement = this;
+          item.parentNode = this;
+          childNodes.push(item);
+        }
+        return this;
+      },
+      appendChild(n) { return this.append(n); },
+      insertBefore(n, ref) {
+        n.parentElement = this;
+        n.parentNode = this;
+        const i = ref ? childNodes.indexOf(ref) : -1;
+        if (i >= 0) childNodes.splice(i, 0, n);
+        else childNodes.push(n);
+        return n;
+      },
+      remove() {
+        if (this.parentNode && Array.isArray(this.parentNode.childNodes)) {
+          const i = this.parentNode.childNodes.indexOf(this);
+          if (i >= 0) this.parentNode.childNodes.splice(i, 1);
+        }
+        this.parentElement = null;
+        this.parentNode = null;
+      },
+      get firstChild() { return childNodes[0] || null; },
+      get lastElementChild() { const kids = this.children; return kids[kids.length - 1] || null; },
+      getClientRects() { return [{ width: 10, height: 10 }]; },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') this.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      matches(sel) {
+        return sel.split(',').some((p) => {
+          const t = p.trim();
+          if (t.startsWith('.')) return classes.has(t.slice(1));
+          if (t.startsWith('#')) return this.id === t.slice(1);
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]$/.exec(t);
+          if (m) return m[2] === undefined ? this.hasAttribute(m[1]) : this.getAttribute(m[1]) === m[2];
+          return this.tagName === t.toUpperCase();
+        });
+      },
+      closest(sel) {
+        let cur = this;
+        while (cur) {
+          if (cur.matches(sel)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.childNodes) {
+            if (c.nodeType === 1) {
+              if (c.matches(sel)) out.push(c);
+              walk(c);
+            }
+          }
+        };
+        walk(this);
+        return out;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      get textContent() { return childNodes.map((c) => (c.nodeType === 3 ? c.nodeValue : c.textContent)).join(''); },
+      set textContent(v) { childNodes.length = 0; if (v) this.append(makeText(v)); },
+      get innerHTML() { return ''; },
+      set innerHTML(v) { childNodes.length = 0; },
+    };
+    if (opts.text) el.append(makeText(opts.text));
+    return el;
+  }
+
+  const html = makeEl('html');
+  const head = makeEl('head');
+  const body = makeEl('body', { className: 'theme-dark' });
+  const home = makeEl('div', { className: 'agy-home' });
+  const greeting = makeEl('h1', { attrs: { 'data-testid': 'home-greeting' }, text: 'Hello' });
+  const newBtn = makeEl('button', { text: 'Fresh Upstream Label' });
+  home.append(greeting, newBtn);
+  body.append(home);
+  html.append(head, body);
+
+  const doc = {
+    nodeType: 9,
+    childNodes: [html],
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    createElement: (t) => makeEl(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+    createTreeWalker(root, whatToShow, filter) {
+      const list = [];
+      const walk = (n) => {
+        if (n !== root) {
+          const show =
+            ((whatToShow & SHOW_TEXT) && n.nodeType === 3) ||
+            ((whatToShow & SHOW_ELEMENT) && n.nodeType === 1);
+          const v = filter && typeof filter.acceptNode === 'function' ? filter.acceptNode(n) : FILTER_ACCEPT;
+          if (v === FILTER_REJECT) return;
+          if (show && v === FILTER_ACCEPT) list.push(n);
+        }
+        for (const c of n.childNodes || []) walk(c);
+      };
+      walk(root);
+      let idx = -1;
+      return {
+        currentNode: root,
+        nextNode() {
+          idx += 1;
+          if (idx >= list.length) return false;
+          this.currentNode = list[idx];
+          return true;
+        },
+      };
+    },
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    NodeFilter: { FILTER_ACCEPT, FILTER_REJECT, FILTER_SKIP, SHOW_ELEMENT, SHOW_TEXT },
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl, RegExp,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const res = vm.runInNewContext(
+    cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'zh-CN', homeLayout: 'classic' }),
+    sandbox
+  );
+  assert.equal(res.status, 'ok');
+  const api = sandbox.window.__agClaudeStyle;
+  assert.equal(typeof api.diagnoseHostCompat, 'function');
+  assert.equal(typeof api.scanMissingI18n, 'function');
+  assert.equal(typeof api.buildCompatReport, 'function');
+
+  const diag = api.diagnoseHostCompat();
+  assert.equal(diag.anchors.home, true);
+  assert.equal(diag.runtime.i18nActive, true);
+  assert.equal(diag.runtime.hasExtraI18n, false);
+
+  const scan1 = api.scanMissingI18n();
+  assert.equal(scan1.language, 'zh-CN');
+  assert.ok(scan1.missing.includes('Fresh Upstream Label'));
+  const report = JSON.parse(api.buildCompatReport(scan1));
+  assert.equal(report.i18nExtraTemplate['zh-CN'].dict['Fresh Upstream Label'], '');
+
+  // Hot-refresh with i18nExtra translates immediately without storing i18nExtra in settings
+  api.refreshConfig({
+    ...cdp.DEFAULT_CONFIG,
+    language: 'zh-CN',
+    homeLayout: 'classic',
+    i18nExtra: { 'zh-CN': { dict: { 'Fresh Upstream Label': '新版上游标签' } } },
+  });
+  assert.equal(newBtn.textContent, '新版上游标签');
+  assert.equal(api.diagnoseHostCompat().runtime.hasExtraI18n, true);
+  const savedSettings = JSON.parse(sandbox.localStorage.getItem('agClaudeStyle.settings.v1') || '{}');
+  assert.equal(Object.prototype.hasOwnProperty.call(savedSettings, 'i18nExtra'), false);
+
+  // readI18nExtra handles missing/invalid files gracefully and parses valid JSON
+  const tmpExtra = path.join(os.tmpdir(), `agy-cs-i18n-extra-${process.pid}-${Date.now()}.json`);
+  try {
+    assert.equal(cdp.readI18nExtra(tmpExtra), null);
+    fs.writeFileSync(tmpExtra, '{"zh-CN":{"dict":{"A":"甲"}}}', 'utf8');
+    assert.deepEqual(cdp.readI18nExtra(tmpExtra), { 'zh-CN': { dict: { A: '甲' } } });
+  } finally {
+    try { fs.unlinkSync(tmpExtra); } catch {}
+  }
+
+  api.destroy();
+});
+
+

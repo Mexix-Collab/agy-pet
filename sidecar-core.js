@@ -148,14 +148,26 @@
     }
 
     applyLang(currentLang);
+    if (domTranslator && typeof domTranslator.setExtraLocales === 'function' && initialConfig?.i18nExtra) {
+      domTranslator.setExtraLocales(initialConfig.i18nExtra, doc);
+    }
 
     const api = {
       version: VERSION,
       codeHash: CODE_HASH,
       sidecar: true,
       refreshConfig(next) {
-        if (next && typeof next === 'object' && Object.prototype.hasOwnProperty.call(next, 'language')) {
-          applyLang(next.language);
+        if (next && typeof next === 'object') {
+          if (
+            domTranslator &&
+            typeof domTranslator.setExtraLocales === 'function' &&
+            Object.prototype.hasOwnProperty.call(next, 'i18nExtra')
+          ) {
+            domTranslator.setExtraLocales(next.i18nExtra || null, doc);
+          }
+          if (Object.prototype.hasOwnProperty.call(next, 'language')) {
+            applyLang(next.language);
+          }
         }
       },
       getState() {

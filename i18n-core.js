@@ -178,6 +178,8 @@
     let compiledTimeRules = [];
     let sentenceMap = new Map();
     let fragmentSet = new Set();
+    let extraLocales = null;
+    let extraSig = '';
     let origHtmlLang = null;
     let htmlLangCaptured = false;
     let sincePrune = 0;
@@ -190,14 +192,44 @@
       fragmentSet = new Set();
     }
 
+    function resolveExtraEntry(langKey) {
+      if (!extraLocales || !langKey || !hasOwn.call(extraLocales, langKey)) return null;
+      const entry = extraLocales[langKey];
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+      const hasStructured = hasOwn.call(entry, 'dict') || hasOwn.call(entry, 'rules');
+      if (!hasStructured) {
+        return { dict: entry, rules: [] };
+      }
+      return {
+        dict: entry.dict && typeof entry.dict === 'object' && !Array.isArray(entry.dict) ? entry.dict : null,
+        rules: Array.isArray(entry.rules) ? entry.rules : [],
+      };
+    }
+
     function compileBundle(nextBundle) {
-      bundle = nextBundle;
+      const userExtra = resolveExtraEntry(nextBundle.lang);
+      let mergedDict = nextBundle.dict || {};
+      if (userExtra && userExtra.dict) {
+        mergedDict = Object.assign(Object.create(null), mergedDict, userExtra.dict);
+      }
+      bundle = { ...nextBundle, dict: mergedDict };
       const baseRules = nextBundle.rules || [];
       const extra = resolveExtraRules ? resolveExtraRules(nextBundle.lang) || [] : [];
-      compiledRules = baseRules.concat(extra).map(([src, flags, to]) => ({
-        re: new RegExp(src, flags),
-        to,
-      }));
+      const userRules = [];
+      if (userExtra && userExtra.rules.length) {
+        for (const r of userExtra.rules) {
+          if (!Array.isArray(r) || typeof r[0] !== 'string' || typeof r[2] !== 'string') continue;
+          try {
+            userRules.push({ re: new RegExp(r[0], typeof r[1] === 'string' ? r[1] : ''), to: r[2] });
+          } catch {}
+        }
+      }
+      compiledRules = userRules.concat(
+        baseRules.concat(extra).map(([src, flags, to]) => ({
+          re: new RegExp(src, flags),
+          to,
+        }))
+      );
       compiledTimeRules = (nextBundle.timeRules || []).map(([src, flags, to]) => ({
         re: new RegExp(src, flags),
         to,
@@ -565,8 +597,31 @@
       return [...seen];
     }
 
+    function setExtraLocales(nextExtra, doc = activeDoc) {
+      let sig = '';
+      if (nextExtra && typeof nextExtra === 'object' && !Array.isArray(nextExtra)) {
+        try {
+          sig = JSON.stringify(nextExtra);
+        } catch {
+          sig = '';
+        }
+      }
+      if (sig === extraSig) return false;
+      extraLocales = sig ? nextExtra : null;
+      extraSig = sig;
+      const targetDoc = doc || activeDoc;
+      if (targetDoc && activeLang !== 'en') {
+        const curLang = activeLang;
+        revert(targetDoc);
+        setLanguage(curLang, targetDoc);
+      }
+      return true;
+    }
+
     function destroy() {
       revert(activeDoc);
+      extraLocales = null;
+      extraSig = '';
       activeDoc = null;
     }
 
@@ -575,12 +630,13 @@
         return activeLang;
       },
       setLanguage,
+      setExtraLocales,
       revertNode,
       translateNode,
       revert,
       destroy,
       missing,
-      stats: () => ({ lang: activeLang, texts: texts.size, attrs: attrs.size }),
+      stats: () => ({ lang: activeLang, texts: texts.size, attrs: attrs.size, hasExtra: Boolean(extraLocales) }),
       t: (text, el) => convert(String(text || '').trim(), 2, el || activeDoc?.body || null),
     };
   }

@@ -1,4 +1,4 @@
-// Shared build helpers for AGY Claude Style (agy-claude-style) Windows and macOS installers.
+// Shared build helpers for AGY Pet (agy-pet) Windows and macOS installers.
 // Zero external npm dependencies: uses built-in Node zlib only.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,9 +24,9 @@ function getArtifactNames(version = cdp.PLUGIN_VERSION) {
   const cleanVersion = normalizeVersion(version);
   return {
     version: cleanVersion,
-    windowsInstaller: `AGY-Claude-Style-v${cleanVersion}-Windows-x64.exe`,
-    macosDmg: `AGY-Claude-Style-v${cleanVersion}-macOS-universal.dmg`,
-    macosApp: 'AGY Claude Style.app',
+    windowsInstaller: `AGY-Pet-v${cleanVersion}-Windows-x64.exe`,
+    macosDmg: `AGY-Pet-v${cleanVersion}-macOS-universal.dmg`,
+    macosApp: 'AGY Pet.app',
   };
 }
 
@@ -103,30 +103,32 @@ function encodePngRgba(width, height, rgba) {
   ]);
 }
 
-// 16x16 pixel crab silhouette (0=transparent, 1=terracotta, 2=eye)
+// 16x16 pixel chibi neko silhouette (AGY Pet heterochromia cat mascot)
+// .=transparent, h=purple-lavender hair/ears, e=pink inner ear, f=warm cream face,
+// l=pink left eye, r=amber-gold right eye, b=blush, m=smile/nose
 const CRAB_GRID = [
   '................',
-  '..11........11..',
-  '.111........111.',
-  '.11..111111..11.',
-  '..111111111111..',
-  '...1111111111...',
-  '..111211112111..',
-  '..111211112111..',
-  '..111111111111..',
-  '.11111111111111.',
-  '.1.1111111111.1.',
-  '1..11......11..1',
-  '...1.1....1.1...',
-  '..1...1..1...1..',
-  '................',
+  '..hh........hh..',
+  '.hehh......hheh.',
+  '.hehhh....hhheh.',
+  '.hhhhhhhhhhhhhh.',
+  '.hhhhhhhhhhhhhh.',
+  '.hhffffffffffhh.',
+  '.hffffffffffffh.',
+  '.hffllffffrrffh.',
+  '.hffllffffrrffh.',
+  '.hfbffffffffbfh.',
+  '.hfffffmmfffffh.',
+  '..hffffffffffh..',
+  '...hhhhhhhhhh...',
+  '....hh....hh....',
   '................',
 ];
 
 function renderCrabIconPng(size) {
   const rgba = Buffer.alloc(size * size * 4);
   const pad = Math.max(1, Math.round(size * 0.06));
-  const radius = Math.max(2, size * 0.22);
+  const radius = Math.max(2, size * 0.24);
   const innerMin = pad;
   const innerMax = size - pad - 1;
 
@@ -147,23 +149,34 @@ function renderCrabIconPng(size) {
       const d = distToRoundedRect(x + 0.5, y + 0.5);
       if (d <= 0.5) {
         const edgeAlpha = d <= -0.5 ? 255 : Math.max(0, Math.min(255, Math.round((0.5 - d) * 255)));
-        // Obsidian background (#1B1918) with subtle terracotta border (#D97757)
+        // Deep starry indigo background (#171429 -> #251D40) with soft violet-pink border
         const isBorder = d > -Math.max(1.2, size * 0.055);
-        let r = isBorder ? 217 : 27;
-        let g = isBorder ? 119 : 25;
-        let b = isBorder ? 87 : 24;
+        const t = y / Math.max(1, size - 1);
+        let r = isBorder ? Math.round(167 + 60 * t) : Math.round(23 + 14 * t);
+        let g = isBorder ? Math.round(139 - 20 * t) : Math.round(20 + 9 * t);
+        let b = isBorder ? Math.round(250 - 45 * t) : Math.round(41 + 23 * t);
 
-        // Map into 16x16 crab grid inside padded central box
-        const boxPad = size * 0.19;
+        // Map into 16x16 chibi neko grid inside padded central box
+        const boxPad = size * 0.14;
         const boxSpan = size - boxPad * 2;
         const gx = Math.floor(((x + 0.5 - boxPad) / boxSpan) * 16);
         const gy = Math.floor(((y + 0.5 - boxPad) / boxSpan) * 16);
         if (gx >= 0 && gx < 16 && gy >= 0 && gy < 16) {
           const cell = CRAB_GRID[gy][gx];
-          if (cell === '1') {
-            r = 224; g = 122; b = 88;
-          } else if (cell === '2') {
-            r = 26; g = 24; b = 23;
+          if (cell === 'h') {
+            r = Math.round(166 + 48 * t); g = Math.round(146 - 10 * t); b = Math.round(245 - 20 * t);
+          } else if (cell === 'e') {
+            r = 249; g = 168; b = 212;
+          } else if (cell === 'f') {
+            r = 255; g = 245; b = 238;
+          } else if (cell === 'l') {
+            r = 236; g = 72; b = 153;
+          } else if (cell === 'r') {
+            r = 245; g = 158; b = 11;
+          } else if (cell === 'b') {
+            r = 251; g = 182; b = 206;
+          } else if (cell === 'm') {
+            r = 124; g = 77; b = 96;
           }
         }
         rgba[idx] = r;
@@ -245,14 +258,16 @@ function buildZip(entries) {
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name.replace(/\\/g, '/'), 'utf8');
     const rawBuf = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8');
-    const compBuf = zlib.deflateRawSync(rawBuf, { level: 9 });
+    const isAlreadyCompressed = /\.(png|webp|webm|jpg|jpeg|zip)$/i.test(entry.name);
+    const compMethod = isAlreadyCompressed ? 0 : 8;
+    const compBuf = isAlreadyCompressed ? rawBuf : zlib.deflateRawSync(rawBuf, { level: 9 });
     const crc = crc32(rawBuf);
 
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4); // version needed
     local.writeUInt16LE(0x0800, 6); // UTF-8 filename flag
-    local.writeUInt16LE(8, 8); // deflate
+    local.writeUInt16LE(compMethod, 8);
     local.writeUInt16LE(0, 10); // mod time
     local.writeUInt16LE(0x596f, 12); // mod date
     local.writeUInt32LE(crc, 14);
@@ -268,7 +283,7 @@ function buildZip(entries) {
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(8, 10);
+    central.writeUInt16LE(compMethod, 10);
     central.writeUInt16LE(0, 12);
     central.writeUInt16LE(0x596f, 14);
     central.writeUInt32LE(crc, 16);

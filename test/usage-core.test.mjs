@@ -973,3 +973,165 @@ test('normalizeAgentStateToTrajectory handles sliced steps, contextWindowUsage t
   assert.equal(info.turnDetails[0].userStepIdx, 248);
   assert.equal(info.turnDetails[0].lastStepIdx, 249);
 });
+
+test('analyzeActiveConversation tracks multi-step tool progress, toolSummary, turnSteps, and awaitingNextTurn accurately', () => {
+  const midTurn = {
+    steps: [
+      { status: 3, step: { case: 'userInput', value: { query: '重构桌面宠物' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { thinking: 'plan', toolCalls: [{ name: 'read_file' }] } } },
+      {
+        status: 3,
+        metadata: { toolCall: { name: 'read_file' }, toolSummary: '读取 DesktopNeko.cs' },
+        step: { case: 'viewFile', value: { absolutePathUri: 'file:///DesktopNeko.cs' } },
+      },
+      {
+        status: 3,
+        metadata: { toolCall: { name: 'run_command' }, toolSummary: '编译打包安装器' },
+        step: { case: 'runCommand', value: {} },
+      },
+    ],
+    generatorMetadata: [],
+  };
+  const infoMid = usageCore.analyzeActiveConversation(midTurn, { cascadeId: 'turn-progress-1' });
+  assert.equal(infoMid.turnSteps, 3);
+  assert.equal(infoMid.awaitingNextTurn, true);
+  assert.equal(infoMid.recentSteps.length, 3);
+  assert.equal(infoMid.recentSteps[1].summary, '读取 DesktopNeko.cs');
+  assert.equal(infoMid.recentSteps[2].summary, '编译打包安装器');
+  assert.equal(infoMid.recentSteps[2].tool, 'run_command');
+
+  const doneTurn = {
+    steps: [
+      ...midTurn.steps,
+      { status: 3, step: { case: 'plannerResponse', value: { response: '已全部完成！' } } },
+    ],
+    generatorMetadata: [],
+  };
+  const infoDone = usageCore.analyzeActiveConversation(doneTurn, { cascadeId: 'turn-progress-1' });
+  assert.equal(infoDone.turnSteps, 4);
+  assert.equal(infoDone.awaitingNextTurn, false);
+  assert.equal(infoDone.isRunning, false);
+});
+
+test('analyzeActiveConversation immediately reflects tail /compact checkpoint before next LLM turn', () => {
+  const baseTraj = {
+    steps: [
+      { status: 3, metadata: { createdAt: '2026-11-23T04:00:00Z' }, step: { case: 'userInput', value: { query: 'First question' } } },
+      { status: 3, metadata: { createdAt: '2026-11-23T04:01:00Z' }, step: { case: 'plannerResponse', value: { response: 'First reply' } } },
+      { status: 3, metadata: { createdAt: '2026-11-23T04:50:00Z' }, step: { case: 'userInput', value: { query: 'Heavy question' } } },
+      { status: 3, metadata: { createdAt: '2026-11-23T04:55:00Z' }, step: { case: 'plannerResponse', value: { response: 'Heavy reply' } } },
+      { status: 3, metadata: { createdAt: '2026-11-23T05:00:00Z' }, step: { case: 'userInput', value: { query: '/compact' } } },
+      {
+        status: 3,
+        metadata: {
+          createdAt: '2026-11-23T05:00:10Z',
+          modelUsage: {
+            inputTokens: 2890,
+            cacheReadTokens: 401391,
+            outputTokens: 3697,
+            thinkingOutputTokens: 58,
+            responseOutputTokens: 3639,
+          },
+        },
+        step: { case: 'checkpoint', value: {} },
+      },
+    ],
+    generatorMetadata: [
+      {
+        stepIndices: [1],
+        metadata: {
+          value: {
+            modelDisplayName: 'Gemini 4 Neon',
+            usage: { inputTokens: 16629, cacheReadTokens: 0, outputTokens: 500, responseOutputTokens: 400 },
+            chatStartMetadata: { checkpointIndex: -1, contextWindowMetadata: { maxContextTokens: 512000, estimatedTokensUsed: 23100 } },
+          },
+        },
+      },
+      {
+        stepIndices: [3],
+        metadata: {
+          value: {
+            modelDisplayName: 'Gemini 4 Neon',
+            usage: { inputTokens: 3000, cacheReadTokens: 398390, outputTokens: 1980, responseOutputTokens: 900 },
+            chatStartMetadata: { checkpointIndex: -1, contextWindowMetadata: { maxContextTokens: 512000, estimatedTokensUsed: 391444 } },
+          },
+        },
+      },
+    ],
+  };
+
+  // Immediately after /compact (no post-compact LLM turn yet):
+  const rightAfter = usageCore.analyzeActiveConversation(baseTraj, { cascadeId: 'tail-compact-1' });
+  assert.equal(rightAfter.compactedAtTail, true);
+  assert.equal(rightAfter.contextUsed, 16629 + 3639, 'Must immediately drop from 402K to baseSysTools + summaryTokens');
+  assert.ok(rightAfter.contextPct < 10, `Expected < 10% right after compact, got ${rightAfter.contextPct}`);
+  assert.equal(rightAfter.checkpoints.length, 1);
+  assert.equal(rightAfter.checkpoints[0].stepIdx, 5);
+  assert.equal(rightAfter.checkpoints[0].beforeCtx, 402290);
+  assert.equal(rightAfter.checkpoints[0].afterCtx, 16629 + 3639);
+  assert.equal(rightAfter.checkpoints[0].isEstimated, true);
+  assert.equal(rightAfter.checkpoints[0].savedTokens, 402290 - (16629 + 3639));
+
+  // Once the next turn arrives, switch seamlessly to server-measured post-compact usage:
+  const afterNextTurn = {
+    steps: [
+      ...baseTraj.steps,
+      { status: 3, metadata: { createdAt: '2026-11-23T05:01:00Z' }, step: { case: 'userInput', value: { query: 'Next' } } },
+      { status: 3, metadata: { createdAt: '2026-11-23T05:01:05Z' }, step: { case: 'plannerResponse', value: { response: 'Ok' } } },
+    ],
+    generatorMetadata: [
+      ...baseTraj.generatorMetadata,
+      {
+        stepIndices: [7],
+        metadata: {
+          value: {
+            modelDisplayName: 'Gemini 4 Neon',
+            usage: { inputTokens: 28603, cacheReadTokens: 0, outputTokens: 880, responseOutputTokens: 500 },
+            chatStartMetadata: { checkpointIndex: 0, contextWindowMetadata: { maxContextTokens: 512000, estimatedTokensUsed: 35110 } },
+          },
+        },
+      },
+    ],
+  };
+  const settled = usageCore.analyzeActiveConversation(afterNextTurn, { cascadeId: 'tail-compact-1' });
+  assert.equal(settled.compactedAtTail, false);
+  assert.equal(settled.contextUsed, 35110);
+  assert.equal(settled.checkpoints.length, 1);
+  assert.equal(settled.checkpoints[0].afterCtx, 28603);
+  assert.equal(settled.checkpoints[0].isEstimated, false);
+  assert.equal(settled.checkpoints[0].savedTokens, 402290 - 28603);
+});
+
+test('analyzeActiveConversation clears TimerCondition-bound schedule timers and honors empty manage_task list', () => {
+  // Case 1: schedule timer bound to task-603 via TimerCondition auto-cancels when task-603 finishes
+  const trajTimerCond = {
+    steps: [
+      { status: 3, step: { case: 'userInput', value: { query: 'Run build' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { toolCalls: [{ name: 'run_command' }] } } },
+      { status: 2, step: { case: 'runCommand', value: { output: 'Tool is running as a background task with task id: conv/task-603' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { toolCalls: [{ name: 'schedule', args: { DurationSeconds: 300, TimerCondition: 'conv/task-603' } }] } } },
+      { status: 2, step: { case: 'generic', value: { output: 'Tool is running as a background task with task id: conv/task-605' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { response: '等待测试完成。' } } },
+      { status: 3, step: { case: 'systemMessage', value: { text: '<SYSTEM_MESSAGE> sender=conv/task-603 Task id "conv/task-603" finished with result: OK </SYSTEM_MESSAGE>' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { response: '全部完成！' } } },
+    ],
+    generatorMetadata: [],
+  };
+  const r1 = usageCore.analyzeActiveConversation(trajTimerCond, { cascadeId: 'timer-cond-1' });
+  assert.equal(r1.pendingBgTasks, 0);
+  assert.equal(r1.isRunning, false);
+
+  // Case 2: even without schedule args (stripped by RPC), manage_task(list) empty output clears stale pending tasks
+  const trajEmptyList = {
+    steps: [
+      { status: 3, step: { case: 'userInput', value: { query: 'Run build' } } },
+      { status: 2, step: { case: 'generic', value: { output: 'Tool is running as a background task with task id: conv/task-705' } } },
+      { status: 3, step: { case: 'generic', value: { output: 'No background tasks are currently running.' } } },
+      { status: 3, step: { case: 'plannerResponse', value: { response: '全部完成！' } } },
+    ],
+    generatorMetadata: [],
+  };
+  const r2 = usageCore.analyzeActiveConversation(trajEmptyList, { cascadeId: 'timer-cond-2' });
+  assert.equal(r2.pendingBgTasks, 0);
+  assert.equal(r2.isRunning, false);
+});

@@ -1,6 +1,9 @@
-# Runtime PID & log files
+# Runtime PID, pet state & log files
 .watch.pid
 watch.log
+*.log
+desktop-pet.json
+pet-todos.json
 
 # Local user configuration (use config.example.json as template)
 config.json
@@ -12,7 +15,20 @@ installer.exe
 # Compiled macOS bundles & disk images (rebuild with `npm run build:macos`)
 *.app/
 *.dmg
-dist/
+/dist/
+
+# Studio animation assets & intermediate files (code-only repo; full animation installer is distributed via GitHub Releases)
+neko-studio/webm-opt/
+neko-studio/dsh-pet/
+neko-studio/videos/
+neko-studio/anims/
+neko-studio/__pycache__/
+neko-studio/base_*.png
+*.webm
+*.mp4
+
+# Commercial fonts excluded from open-source distribution
+installer/watcher/assets/*.ttf
 
 # Dependencies & OS metadata
 node_modules/

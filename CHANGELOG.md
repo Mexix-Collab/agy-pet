@@ -1,8 +1,26 @@
 # Changelog
 
-All notable changes to **AGY Claude Style (`agy-claude-style`)** are documented in this file.
+All notable changes to **AGY Pet (`agy-pet`)** (derived from `0DNANCY/agy-claude-style`) are documented in this file.
 
-## [Unreleased]
+## [v2.0.0] - 2026-11-25 (AGY Pet Edition)
+
+### 🐾 全新独立透明桌面宠物 & 输入框趴框伴侣
+- **Windows WebView2 + DirectComposition 透明桌面宠物 (`DesktopNeko.cs` / `pet-ui.html`)**：
+  - 内置 114 段高清透明 WebM 动作（发行安装包自带），支持工作状态联动、随机小剧场、时段彩蛋、睡眠循环及右键打开目录扩展自定义 `.webm`。
+  - 多会话 / 子代理 / Swarm 实时任务进度胶囊栈（支持展开详情与紧凑数字圆圈一键切换）。
+  - 右键新增 **「👑 称呼设置」**（默认「老大」，内置 8 种常用称呼预设及自定义称呼），实时同步全部碎碎念、问候与待办提醒。
+  - 集成自由拖拽弹簧跟手、双击弹弓发射与空中抓取积分、实时天气卡片、头顶轻量待办清单（含到期前 15 分钟提醒）、Q 弹点击音效及悬停快捷键（`S` / `D` / `W` / `C`）。
+- **输入框 20 套趴框 / 坐姿猫娘动画**：
+  - 内置 10 套趴框 + 10 套坐姿透明 WebM 动画、双击查看配额气泡及高上下文自动 `/compact` 提醒卡片。
+- **后台唤醒防白屏修复**：
+  - 修复从后台托盘点击任务状态切回前台时，冷启动过早触发缺参路由导致白屏加载转圈的问题，改用纯净单实例唤醒 + 侧边栏就绪守卫 + 自动继承 `project` 查询参数。
+
+### 🎨 全新 `AGY Pet` 品牌、现代高 DPI 安装器与 `agy-fast` 加速集成
+- **品牌更名与平滑迁移**：正式更名为 **AGY Pet (`agy-pet`)**，全新像素异色瞳猫耳图标、全新深紫星空渐变高 DPI 现代安装器面板（彻底消除文字截断），安装时自动平滑迁移旧版 `agy-claude-style` 用户配置与待办并清理旧快捷方式。
+- **内置 `agy-fast` 加速插件一键管理**：安装器与桌面宠物右键均支持一键部署与启停 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（保留完整 MIT License）。
+- **开源合规清理**：移除非开源商业字体，全部改用零版权风险系统圆体/黑体/楷体/漫画体栈；代码仓库与大体积动画素材分离，完整动画随 Release 安装包分发。
+
+## [Upstream History] — `0DNANCY/agy-claude-style`
 
 ### 🌐 语言支持增强（Swarm UI 侧栏 & Plan / Orchestrator 模式）
 - **Swarm 蜂群侧栏（`/swarm` 面板）完整 5 语言本地化**：

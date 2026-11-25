@@ -1189,12 +1189,34 @@
           }, -1)
         : steps.length - 1;
     let lastMeasuredStepIdx = lastCoveredArrIdx;
+    let compactedAtTail = false;
+    let tailCheckpointStep = null;
+    let preCompactContextUsed = activeContextUsed || latestCwUsed;
+
+    const estimateCheckpointSummaryTokens = (cpStep) => {
+      if (!cpStep || typeof cpStep !== 'object') return 0;
+      const mu = cpStep.metadata?.modelUsage || cpStep.step?.value?.metadata?.modelUsage;
+      if (mu) {
+        const out = Number(mu.outputTokens || 0);
+        const think = Number(mu.thinkingOutputTokens || 0);
+        const resp = Number(mu.responseOutputTokens || Math.max(0, out - think) || 0);
+        if (resp > 0) return resp;
+      }
+      const cv = cpStep.step?.value || {};
+      const parts = [cv.userIntent, cv.sessionSummary, cv.codeChangeSummary, cv.memorySummary]
+        .filter((s) => typeof s === 'string' && s.trim())
+        .join('\n');
+      return parts ? estimateTextTokens(parts).tokens : 0;
+    };
 
     for (let idx = lastCoveredArrIdx + 1; idx < steps.length; idx++) {
       const st = steps[idx];
       if (!st) continue;
       if (st.step?.case === 'checkpoint') {
+        preCompactContextUsed = activeContextUsed || preCompactContextUsed || latestCwUsed;
         activeContextUsed = 0;
+        compactedAtTail = true;
+        tailCheckpointStep = st;
         lastMeasuredStepIdx = idx;
         continue;
       }
@@ -1208,6 +1230,8 @@
       const sResp = Number(mu.responseOutputTokens || Math.max(0, sOut - sThink) || 0);
       if (sInp + sCr + sCw > 0) {
         activeContextUsed = sInp + sCr + sCw + sResp;
+        compactedAtTail = false;
+        tailCheckpointStep = null;
         lastMeasuredStepIdx = idx;
       }
     }
@@ -1235,7 +1259,42 @@
         if (estTool > 0) pendingStepTokens += estTool;
       }
     }
-    if (pendingStepTokens > 0) {
+
+    const maxContextTokens =
+      latestCwMaxTokens ||
+      latestModelInfoMaxTokens ||
+      Number(known.maxContextTokens || 0) ||
+      256000;
+
+    let tailCompactSummaryTokens = 0;
+    let tailCompactBaseTokens = 0;
+    if (compactedAtTail) {
+      tailCompactSummaryTokens = estimateCheckpointSummaryTokens(tailCheckpointStep);
+      let bdBase = 0;
+      if (latestBreakdown && Array.isArray(latestBreakdown.groups)) {
+        for (const grp of latestBreakdown.groups) {
+          const gName = String(grp.name || '');
+          const gTokens = Number(grp.numTokens || 0);
+          if (
+            grp.type === 1 || grp.type === 2 || grp.type === 4 || grp.type === 5 || grp.type === 6 || grp.type === 9 ||
+            /system|skill|subagent|plugin|tool/i.test(gName)
+          ) {
+            bdBase += gTokens;
+          }
+        }
+      }
+      const knownBase = Number(known.sysTokens || 0) + Number(known.toolsTokens || 0);
+      let firstCallBase = 0;
+      if (callList.length > 0 && stepOffset === 0) {
+        const fc = callList[0];
+        const fcPrompt = Number(fc.inputTokens || 0) + Number(fc.cacheReadTokens || 0) + Number(fc.cacheWriteTokens || 0);
+        if (fcPrompt > 0) {
+          firstCallBase = Math.min(fcPrompt, Math.min(40000, Math.round(maxContextTokens * 0.15)));
+        }
+      }
+      tailCompactBaseTokens = bdBase || knownBase || firstCallBase || 0;
+      activeContextUsed = tailCompactBaseTokens + tailCompactSummaryTokens + pendingStepTokens;
+    } else if (pendingStepTokens > 0) {
       if (activeContextUsed > 0) {
         activeContextUsed += pendingStepTokens;
       } else if (callList.length === 0) {
@@ -1243,12 +1302,11 @@
       }
     }
 
-    const maxContextTokens =
-      latestCwMaxTokens ||
-      latestModelInfoMaxTokens ||
-      Number(known.maxContextTokens || 0) ||
-      256000;
-    const contextUsed = activeContextUsed > 0 ? activeContextUsed : latestCwUsed;
+    const contextUsed = compactedAtTail
+      ? activeContextUsed
+      : activeContextUsed > 0
+      ? activeContextUsed
+      : latestCwUsed;
     const contextRemaining = Math.max(0, maxContextTokens - contextUsed);
     const contextPct = maxContextTokens > 0 ? Math.min(100, (contextUsed / maxContextTokens) * 100) : 0;
     const contextRemainingPct =
@@ -1325,6 +1383,18 @@
         toolsChildren = [];
       } else {
         toolsChildren.sort((a, b) => b.tokens - a.tokens);
+      }
+    }
+
+    if (compactedAtTail) {
+      msgTokens = tailCompactSummaryTokens + pendingStepTokens;
+      msgChildren = [];
+      userMsgTokens = 0;
+      botMsgTokens = tailCompactSummaryTokens;
+      toolIoTokens = 0;
+      maxBreakdownArrIdx = steps.length - 1;
+      if (sysTokens === 0 && toolsTokens === 0 && tailCompactBaseTokens > 0) {
+        sysTokens = tailCompactBaseTokens;
       }
     }
 
@@ -1489,37 +1559,335 @@
       : 0;
     const truncationReason = Number(latestCw?.truncationReason || 0);
 
-    // Detect active/running or error state for mascot & status
+    // Detect active/running or error state for mascot & desktop task progress
+    // Never treat status === 7 / WAITING as active: Antigravity uses WAITING when idle awaiting next user turn!
+    const isStepActiveStatus = (stVal) => {
+      if (stVal === 1 || stVal === 2 || stVal === 9) return true;
+      if (typeof stVal === 'string') {
+        const u = stVal.toUpperCase();
+        return u.includes('RUNNING') || u.includes('PENDING') || u.includes('GENERATING');
+      }
+      return false;
+    };
+    const isStepErrorStatus = (stVal) => {
+      if (stVal === 4 || stVal === 6) return true;
+      if (typeof stVal === 'string') {
+        const u = stVal.toUpperCase();
+        return u.includes('ERROR') || u.includes('FAILED');
+      }
+      return false;
+    };
+    const trajRunStatus = trajObj?.response?.status ?? trajObj?.status ?? t.status;
     let isRunning = false;
     let isThinking = false;
+    let isWaiting = false;
     let hasError = false;
-    for (let i = 0; i < steps.length; i++) {
-      const st = steps[i];
-      if (!st) continue;
-      if (st.status === 1 || st.status === 2) {
+    let hasExplicitActiveSignal = false;
+    if (typeof trajRunStatus === 'number') {
+      if (trajRunStatus === 2) {
         isRunning = true;
-        if (st.step?.case === 'plannerResponse' && !st.step?.value?.response) isThinking = true;
+        hasExplicitActiveSignal = true;
+      } else if (isStepErrorStatus(trajRunStatus)) {
+        hasError = true;
       }
-      if (i >= Math.max(0, steps.length - 8) && (st.status === 4 || st.status === 6)) {
+    } else if (typeof trajRunStatus === 'string') {
+      const u = trajRunStatus.toUpperCase();
+      if (u.includes('RUNNING')) {
+        isRunning = true;
+        hasExplicitActiveSignal = true;
+      } else if (isStepErrorStatus(u)) {
         hasError = true;
       }
     }
-    if (!isRunning && (t.agentStatus === 2 || t.fullyIdle === false)) {
+    if (t.agentStatus === 2 || t.fullyIdle === false) {
       isRunning = true;
+      hasExplicitActiveSignal = true;
     }
 
     // Build per-turn details (turnDetails) using a single-pass hasUnconsumedTurn state machine
     const userBoundaries = [];
+    let activeTaskTitle = '';
     for (let idx = 0; idx < steps.length; idx++) {
       if (isUserTurnBoundary(steps[idx])) {
+        const promptTxt = extractUserPromptText(steps[idx]);
+        if (promptTxt) {
+          const clean = promptTxt.replace(/\s+/g, ' ').trim();
+          if (clean) activeTaskTitle = clean.length > 40 ? clean.slice(0, 39) + '…' : clean;
+        }
         userBoundaries.push({
           idx,
           realIdx: stepRealIndices[idx],
-          prompt: extractUserPromptText(steps[idx]),
+          prompt: promptTxt,
           startTimeSec: tsSec(steps[idx]?.metadata?.createdAt),
         });
       }
     }
+
+    const lastBoundaryIdx = userBoundaries.length > 0 ? userBoundaries[userBoundaries.length - 1].idx : -1;
+    let lastRealUserIdx = lastBoundaryIdx;
+    for (let b = userBoundaries.length - 1; b >= 0; b--) {
+      if (userBoundaries[b].prompt) {
+        lastRealUserIdx = userBoundaries[b].idx;
+        break;
+      }
+    }
+    const turnStartIdx = lastBoundaryIdx >= 0 ? lastBoundaryIdx + 1 : 0;
+    const bgScanStartIdx = lastRealUserIdx >= 0 ? lastRealUserIdx : turnStartIdx;
+    let turnSteps = 0;
+    let hasActiveTool = false;
+    let awaitingNextTurn = false;
+    let lastNonMetaStepCase = '';
+    let lastNonMetaStepActive = false;
+    let lastNonMetaStepError = false;
+    let lastPlannerHasTools = false;
+    let lastPlannerHasResponse = false;
+    const activeCheckFloor = Math.max(turnStartIdx, steps.length - 4);
+    const pendingBgTaskIds = new Set();
+    const bgTimerConditions = new Map();
+    let pendingScheduleConds = [];
+    const bgStepIdMap = new Map();
+    let planSteps = [];
+    let currentFocus = '';
+    const parseToolArgsObj = (tc) => {
+      if (!tc || typeof tc !== 'object') return null;
+      if (tc.args && typeof tc.args === 'object') return tc.args;
+      if (typeof tc.argumentsJson === 'string' && tc.argumentsJson.trim()) {
+        try {
+          const parsed = JSON.parse(tc.argumentsJson);
+          if (parsed && typeof parsed === 'object') return parsed;
+        } catch {}
+      }
+      return null;
+    };
+    const nonBgLaunchCases = new Set([
+      'plannerResponse',
+      'viewFile',
+      'readFile',
+      'editFile',
+      'writeToFile',
+      'codeAction',
+      'grep',
+      'grepSearch',
+      'find',
+      'findByName',
+      'listDir',
+      'checkpoint',
+      'ephemeralMessage',
+    ]);
+
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i];
+      if (!st) continue;
+      const sc = st.step?.case || '';
+      if (i >= bgScanStartIdx) {
+        const sv = st.step?.value || st.runCommand || st.userInput || st.plannerResponse || {};
+        if (sc === 'plannerResponse' && Array.isArray(sv.toolCalls)) {
+          pendingScheduleConds = [];
+          for (const tc of sv.toolCalls) {
+            const tn = String(tc?.name || '').trim();
+            if (tn === 'update_steps') {
+              const aObj = parseToolArgsObj(tc);
+              let rawSteps = aObj?.steps;
+              if (typeof rawSteps === 'string') {
+                try { rawSteps = JSON.parse(rawSteps); } catch { rawSteps = null; }
+              }
+              if (Array.isArray(rawSteps) && rawSteps.length > 0) {
+                planSteps = rawSteps
+                  .filter((x) => x && typeof x === 'object' && String(x.title || '').trim())
+                  .slice(0, 12)
+                  .map((x) => ({
+                    title: String(x.title).trim(),
+                    status: String(x.status || 'pending').trim().toLowerCase(),
+                  }));
+              }
+            } else if (tn === 'update_focus') {
+              const aObj = parseToolArgsObj(tc);
+              const f = String(aObj?.focus || '').trim().replace(/^["']|["']$/g, '').trim();
+              if (f) currentFocus = f;
+            } else if (tn === 'schedule') {
+              const aObj = parseToolArgsObj(tc);
+              const cond = String(aObj?.TimerCondition || aObj?.timerCondition || '').trim();
+              pendingScheduleConds.push(cond);
+            }
+          }
+        }
+        let itemsText = '';
+        if (Array.isArray(sv.items) && sv.items.length > 0) {
+          itemsText = sv.items
+            .map((it) => {
+              if (typeof it === 'string') return it;
+              if (!it || typeof it !== 'object') return '';
+              if (typeof it.text === 'string' && it.text) return it.text;
+              if (typeof it.query === 'string' && it.query) return it.query;
+              if (it.chunk?.case === 'text' && typeof it.chunk.value === 'string') return it.chunk.value;
+              return '';
+            })
+            .filter(Boolean)
+            .join(' ');
+        }
+        const rawOut = String(
+          itemsText ||
+            sv.output ||
+            sv.content ||
+            sv.query ||
+            sv.userResponse ||
+            sv.result?.result ||
+            (typeof sv.result === 'string' ? sv.result : '') ||
+            sv.combinedOutput?.full ||
+            sv.combinedOutput?.truncated ||
+            (typeof sv.combinedOutput === 'string' ? sv.combinedOutput : '') ||
+            sv.text ||
+            sv.message ||
+            ''
+        );
+        if (!isUserTurnBoundary(st) && !nonBgLaunchCases.has(sc)) {
+          if (/No background tasks are currently running/i.test(rawOut)) {
+            pendingBgTaskIds.clear();
+            bgTimerConditions.clear();
+          }
+          const bgMatch = rawOut.match(/(?:Command|Tool)\s+is\s+running\s+as\s+a\s+background\s+task\s+with\s+task\s+id:\s*([a-zA-Z0-9_./-]{4,})/i);
+          if (bgMatch && bgMatch[1]) {
+            const bgId = bgMatch[1].trim();
+            pendingBgTaskIds.add(bgId);
+            bgStepIdMap.set(i, bgId);
+            if (pendingScheduleConds.length > 0) {
+              const cond = pendingScheduleConds.shift();
+              if (cond && cond.toLowerCase() !== 'never') {
+                bgTimerConditions.set(bgId, cond);
+              }
+            }
+          }
+        }
+        if (rawOut.includes('<SYSTEM_MESSAGE>') || sc === 'systemMessage' || isUserTurnBoundary(st)) {
+          const resolvedIds = [];
+          const sysFinishMatches = rawOut.matchAll(/Task id\s+"([^"]+)"\s+(?:finished|was canceled|failed|completed|terminated)/gi);
+          for (const m of sysFinishMatches) {
+            if (m[1]) {
+              const id = m[1].trim();
+              pendingBgTaskIds.delete(id);
+              resolvedIds.push(id);
+            }
+          }
+          const senderMatches = rawOut.matchAll(/sender=([^\s)\]:]+)/gi);
+          for (const m of senderMatches) {
+            if (m[1]) {
+              const id = m[1].trim();
+              pendingBgTaskIds.delete(id);
+              resolvedIds.push(id);
+            }
+          }
+          if (bgTimerConditions.size > 0) {
+            for (const [tid, cond] of Array.from(bgTimerConditions.entries())) {
+              const cLow = cond.toLowerCase();
+              if (cLow === 'any' || resolvedIds.some((rid) => rid.toLowerCase() === cLow)) {
+                pendingBgTaskIds.delete(tid);
+                bgTimerConditions.delete(tid);
+              }
+            }
+          }
+        }
+        const cancelMatch = rawOut.match(/Task\s+"([^"]+)"\s+cancel(?:l)?ed/i);
+        if (cancelMatch && cancelMatch[1]) {
+          const cidCancel = cancelMatch[1].trim();
+          pendingBgTaskIds.delete(cidCancel);
+          bgTimerConditions.delete(cidCancel);
+        }
+      }
+    }
+
+    for (let i = 0; i < steps.length; i++) {
+      const st = steps[i];
+      if (!st) continue;
+      const sc = st.step?.case || '';
+      const mappedBgId = bgStepIdMap.get(i);
+      const stepActive = mappedBgId ? pendingBgTaskIds.has(mappedBgId) : isStepActiveStatus(st.status);
+      if (i >= turnStartIdx && sc && !isUserTurnBoundary(st) && sc !== 'checkpoint' && sc !== 'ephemeralMessage') {
+        turnSteps++;
+        lastNonMetaStepCase = sc;
+        lastNonMetaStepActive = stepActive;
+        lastNonMetaStepError = isStepErrorStatus(st.status);
+        if (sc === 'plannerResponse') {
+          const pv = st.step?.value || {};
+          lastPlannerHasTools = Array.isArray(pv.toolCalls) && pv.toolCalls.length > 0;
+          lastPlannerHasResponse = Boolean(pv.response && String(pv.response).trim());
+        } else {
+          lastPlannerHasTools = false;
+          lastPlannerHasResponse = false;
+        }
+      }
+      if (i >= activeCheckFloor && stepActive) {
+        isRunning = true;
+        if (sc === 'plannerResponse') {
+          const pv = st.step?.value || {};
+          const hasTools = Array.isArray(pv.toolCalls) && pv.toolCalls.length > 0;
+          if (!hasTools && !pv.response) isThinking = true;
+          else if (hasTools) hasActiveTool = true;
+        } else if (sc && !isUserTurnBoundary(st) && sc !== 'checkpoint') {
+          hasActiveTool = true;
+        }
+      }
+    }
+    if (lastNonMetaStepError) {
+      hasError = true;
+    }
+    if (pendingBgTaskIds.size > 0) {
+      isRunning = true;
+      hasExplicitActiveSignal = true;
+      hasActiveTool = true;
+    }
+    if (hasActiveTool) isThinking = false;
+    if (
+      turnSteps > 0 &&
+      ((lastNonMetaStepCase && lastNonMetaStepCase !== 'plannerResponse') ||
+        (lastNonMetaStepCase === 'plannerResponse' && lastPlannerHasTools && !lastPlannerHasResponse))
+    ) {
+      awaitingNextTurn = true;
+    }
+    // If the final step of the current turn is a completed plannerResponse with text, no pending tool calls,
+    // and no active background tasks / timers / explicit agent running state, the turn is definitively done
+    if (
+      turnSteps > 0 &&
+      lastNonMetaStepCase === 'plannerResponse' &&
+      !lastNonMetaStepActive &&
+      !lastNonMetaStepError &&
+      !lastPlannerHasTools &&
+      lastPlannerHasResponse &&
+      !hasExplicitActiveSignal
+    ) {
+      isRunning = false;
+      isThinking = false;
+      awaitingNextTurn = false;
+      hasError = false;
+    }
+
+    const recentSteps = [];
+    const tailStart = Math.max(turnStartIdx, steps.length - 12);
+    for (let i = tailStart; i < steps.length; i++) {
+      const st = steps[i];
+      if (!st || !st.step?.case) continue;
+      const sc = st.step.case;
+      if (isUserTurnBoundary(st) || sc === 'checkpoint' || sc === 'ephemeralMessage') continue;
+      const realIdx = i < stepRealIndices.length ? stepRealIndices[i] : i;
+      const sInfo = stepInfoMap.get(realIdx) || stepInfoMap.get(i);
+      const summary = String(sInfo?.toolSummary || st.metadata?.toolSummary || '').trim();
+      const toolName = String(
+        sInfo?.toolName ||
+          st.metadata?.toolCall?.name ||
+          st.step?.value?.toolCalls?.[0]?.name ||
+          st.step?.value?.toolName ||
+          st.step?.value?.name ||
+          ''
+      ).trim();
+      const mappedBgId = bgStepIdMap.get(i);
+      const isAct = mappedBgId ? pendingBgTaskIds.has(mappedBgId) : isStepActiveStatus(st.status);
+      recentSteps.push({
+        type: sc,
+        status: isAct ? 2 : isStepErrorStatus(st.status) ? 4 : 3,
+        tool: toolName,
+        summary,
+      });
+    }
+    const recentStepsTrimmed = recentSteps.slice(-5);
 
     const toRealStepIdx = (arrIdx) => {
       if (arrIdx < 0) return arrIdx;
@@ -1793,6 +2161,55 @@
     const clampedToolResults = msgTokens > 0 ? Math.min(msgTokens, toolIoTokens) : toolIoTokens;
     const chatMsgTokens = msgTokens > 0 ? Math.max(0, msgTokens - clampedToolResults) : userMsgTokens + botMsgTokens;
 
+    const checkpoints = [];
+    for (let idx = 0; idx < steps.length; idx++) {
+      const st = steps[idx];
+      if (!st || st.step?.case !== 'checkpoint') continue;
+      const realIdx = stepRealIndices[idx];
+      const summaryTokens = estimateCheckpointSummaryTokens(st);
+      let beforeCtx = 0;
+      let afterCtx = 0;
+      let isEstimated = false;
+      for (let ci = callList.length - 1; ci >= 0; ci--) {
+        const c = callList[ci];
+        const maxS = c.stepIndices.length > 0 ? Math.max(...c.stepIndices) : -1;
+        if (maxS >= 0 && maxS < realIdx) {
+          beforeCtx = Number(c.contextUsed || 0);
+          break;
+        }
+      }
+      if (!beforeCtx) {
+        const cpMu = st.metadata?.modelUsage || st.step?.value?.metadata?.modelUsage;
+        if (cpMu) {
+          beforeCtx = Number(cpMu.inputTokens || 0) + Number(cpMu.cacheReadTokens || 0) + Number(cpMu.cacheWriteTokens || 0);
+        }
+      }
+      for (let ci = 0; ci < callList.length; ci++) {
+        const c = callList[ci];
+        const minS = c.stepIndices.length > 0 ? Math.min(...c.stepIndices) : -1;
+        if (minS > realIdx) {
+          const pTok = Number(c.inputTokens || 0) + Number(c.cacheReadTokens || 0) + Number(c.cacheWriteTokens || 0);
+          afterCtx = pTok > 0 ? pTok : Number(c.contextUsed || 0);
+          break;
+        }
+      }
+      if (!afterCtx) {
+        isEstimated = true;
+        afterCtx = compactedAtTail && st === tailCheckpointStep
+          ? tailCompactBaseTokens + summaryTokens
+          : (sysTokens + toolsTokens || tailCompactBaseTokens) + summaryTokens;
+      }
+      checkpoints.push({
+        stepIdx: realIdx,
+        beforeCtx,
+        afterCtx,
+        savedTokens: beforeCtx > 0 ? Math.max(0, beforeCtx - afterCtx) : 0,
+        isEstimated,
+        summaryTokens,
+        createdAtSec: tsSec(st.metadata?.createdAt),
+      });
+    }
+
     const result = {
       cascadeId,
       turns: turnDetails.length || callList.length,
@@ -1857,6 +2274,8 @@
       sustainedPeakSpeed,
       checkpointIdx,
       compactedSteps,
+      compactedAtTail,
+      checkpoints,
       truncationReason,
       budgets: latestBudgets || {
         customizationTokenBudget: known.customizationTokenBudget || 20000,
@@ -1866,7 +2285,15 @@
       hasExactContextLimits: Boolean(latestCwMaxTokens > 0),
       isRunning,
       isThinking,
+      isWaiting,
+      awaitingNextTurn,
+      pendingBgTasks: pendingBgTaskIds.size,
+      turnSteps,
       hasError,
+      activeTaskTitle,
+      planSteps,
+      currentFocus,
+      recentSteps: recentStepsTrimmed,
     };
 
     if (Array.isArray(opts.subagents) && opts.subagents.length > 0) {

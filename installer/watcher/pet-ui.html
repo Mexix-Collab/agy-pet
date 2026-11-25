@@ -1,0 +1,3204 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AGY Pet</title>
+  <style>
+    :root {
+      --pet-scale: 1;
+      --pet-font: "YouYuan", "幼圆", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent !important;
+      overflow: hidden;
+      font-family: var(--pet-font);
+    }
+
+    #scene {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    /* 宠物画布固定贴近窗口底部居中，上方留白给气泡与贴图 */
+    #pet-wrap {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      transform: translateX(-50%);
+      width: var(--pet-w, 320px);
+      height: var(--pet-h, 180px);
+      pointer-events: none;
+    }
+
+    #pet-body {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-origin: 50% 91.5%;
+      will-change: transform;
+      pointer-events: none;
+    }
+
+    video.pet-video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: transparent;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.16s ease;
+    }
+    video.pet-video.is-front {
+      opacity: 1;
+    }
+    body.is-throwing video.pet-video {
+      transition: none !important;
+    }
+
+    /* 气泡锚定在 16:9 视频画框上方并留出安全呼吸间距（高空道具动画如放风筝/吹气球时自动再抬高），彻底避免遮挡 */
+    #bubble-anchor {
+      position: absolute;
+      left: 50%;
+      bottom: calc(var(--pet-h, 180px) + var(--bubble-lift, 18px));
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      pointer-events: none;
+      z-index: 20;
+      transition: bottom 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    /* ── 1. 碎碎念牛奶白圆润气泡（dsh-pet 同款风格） ── */
+    #whisper-wrap {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      pointer-events: auto;
+      cursor: pointer;
+      animation: popIn 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #whisper-wrap.is-on {
+      display: flex;
+    }
+    #whisper-meme {
+      display: none;
+      width: 78px;
+      height: 78px;
+      object-fit: contain;
+      margin-bottom: 2px;
+      filter: drop-shadow(0 3px 8px rgba(32, 24, 58, 0.18));
+      pointer-events: none;
+    }
+    #whisper-meme.is-on {
+      display: block;
+    }
+    #whisper-wrap.is-popping {
+      animation: bubblePopOut 0.18s ease-out forwards;
+    }
+    #whisper-bubble {
+      position: relative;
+      max-width: calc(286px * var(--pet-scale, 1));
+      min-width: 68px;
+      padding: calc(8px * var(--pet-scale, 1)) calc(13px * var(--pet-scale, 1));
+      border-radius: calc(14px * var(--pet-scale, 1));
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(196, 178, 248, 0.58);
+      color: #2b2438;
+      font-size: calc(13px * var(--pet-scale, 1));
+      font-weight: 600;
+      line-height: 1.48;
+      text-align: center;
+      white-space: pre-line;
+      word-break: break-word;
+      box-shadow: 0 4px 14px rgba(24, 18, 46, 0.14), 0 1px 3px rgba(0, 0, 0, 0.08);
+    }
+    #whisper-bubble::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: -6px;
+      transform: translateX(-50%);
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 6px solid rgba(255, 255, 255, 0.95);
+    }
+
+    /* ── 1b. 实时天气环境气泡（dsh-pet 同款风格） ── */
+    #weather-card {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      width: calc(248px * var(--pet-scale, 1));
+      padding: 10px 13px;
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.96);
+      border: 1.2px solid rgba(147, 197, 253, 0.72);
+      color: #1e293b;
+      box-shadow: 0 8px 22px rgba(20, 28, 56, 0.18), 0 1px 3px rgba(0, 0, 0, 0.08);
+      pointer-events: auto;
+      animation: popIn 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #weather-card.is-on { display: flex; }
+    .weather-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 6px;
+      font-size: 11.5px; font-weight: 700; color: #475569;
+    }
+    .weather-acts { display: flex; gap: 4px; }
+    .mini-icon-btn {
+      border: none; background: rgba(148, 163, 184, 0.16); color: #475569;
+      border-radius: 7px; width: 20px; height: 20px; font-size: 11px; font-weight: 700;
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .mini-icon-btn:hover { background: rgba(99, 102, 241, 0.18); color: #4f46e5; }
+    .weather-main { display: flex; align-items: center; gap: 10px; }
+    .weather-svg { width: 38px; height: 38px; flex: none; }
+    .weather-temp { font-size: 24px; font-weight: 800; color: #0f172a; line-height: 1.05; }
+    .weather-summary { font-size: 12.5px; font-weight: 700; color: #3b82f6; margin-top: 2px; }
+    .weather-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+      background: rgba(241, 245, 249, 0.85); border-radius: 9px; padding: 5px 6px;
+      font-size: 10.5px; text-align: center;
+    }
+    .weather-grid b { display: block; font-size: 11.5px; color: #1e293b; }
+    .weather-grid span { color: #64748b; }
+    .weather-tip {
+      font-size: 11.5px; color: #4338ca; background: rgba(238, 242, 255, 0.9);
+      padding: 5px 8px; border-radius: 8px; line-height: 1.38; font-weight: 600;
+    }
+
+    /* ── 1c. 头顶轻量待办清单面板（dsh-pet 同款风格） ── */
+    #todo-panel {
+      display: none;
+      flex-direction: column;
+      gap: 7px;
+      width: calc(272px * var(--pet-scale, 1));
+      padding: 10px 12px;
+      border-radius: 15px;
+      background: rgba(255, 255, 255, 0.97);
+      border: 1.3px solid rgba(196, 181, 253, 0.78);
+      color: #1e293b;
+      box-shadow: 0 10px 26px rgba(24, 18, 46, 0.22), 0 1px 3px rgba(0, 0, 0, 0.08);
+      pointer-events: auto;
+      animation: popIn 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #todo-panel.is-on { display: flex; }
+    .todo-head {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 12.5px; font-weight: 800; color: #4c1d95;
+    }
+    .todo-input-row { display: flex; gap: 5px; }
+    .todo-input {
+      flex: 1 1 auto; min-width: 0;
+      border: 1px solid rgba(167, 139, 250, 0.55); border-radius: 9px;
+      padding: 5px 8px; font-size: 12px; font-family: inherit;
+      background: #faf5ff; color: #1e1b4b; outline: none;
+      user-select: text; -webkit-user-select: text;
+    }
+    .todo-input:focus { border-color: #7c3aed; background: #fff; }
+    .todo-add-btn {
+      flex: none; border: none; border-radius: 9px; padding: 0 10px;
+      background: linear-gradient(135deg, #8b5cf6, #ec4899); color: #fff;
+      font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+    }
+    .todo-add-btn:hover { filter: brightness(1.06); }
+    .todo-due-row { display: flex; flex-wrap: wrap; gap: 4px; }
+    .todo-due-chip {
+      border: 1px solid rgba(196, 181, 253, 0.65); background: #f8fafc; color: #475569;
+      border-radius: 7px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; cursor: pointer;
+    }
+    .todo-due-chip.is-active { background: #ede9fe; border-color: #8b5cf6; color: #5b21b6; }
+    .todo-list {
+      display: flex; flex-direction: column; gap: 4px;
+      max-height: 118px; overflow-y: auto; padding-right: 2px;
+    }
+    .todo-empty { font-size: 11.5px; color: #94a3b8; text-align: center; padding: 8px 0; }
+    .todo-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 7px; border-radius: 8px; background: #f8fafc;
+      border: 1px solid rgba(226, 232, 240, 0.9); font-size: 11.5px;
+    }
+    .todo-row.is-done { background: #ecfdf5; border-color: rgba(110, 231, 183, 0.6); }
+    .todo-chk {
+      width: 15px; height: 15px; border-radius: 50%; flex: none;
+      border: 1.5px solid #a78bfa; background: #fff; color: #fff;
+      font-size: 9.5px; display: inline-flex; align-items: center; justify-content: center;
+      cursor: pointer; padding: 0;
+    }
+    .todo-row.is-done .todo-chk { background: #10b981; border-color: #10b981; }
+    .todo-txt-wrap { flex: 1 1 auto; min-width: 0; }
+    .todo-txt {
+      color: #1e293b; font-weight: 600; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .todo-row.is-done .todo-txt { color: #059669; text-decoration: line-through; }
+    .todo-due-tag { font-size: 9.5px; color: #7c3aed; }
+    .todo-due-tag.is-overdue { color: #dc2626; font-weight: 700; }
+    .todo-del {
+      flex: none; border: none; background: transparent; color: #94a3b8;
+      font-size: 11px; font-weight: 700; border-radius: 6px; padding: 1px 5px; cursor: pointer;
+    }
+    .todo-del:hover { background: rgba(248, 113, 113, 0.16); color: #dc2626; }
+    .todo-del.is-confirm { background: #ef4444; color: #fff; font-size: 10px; }
+
+    /* ── 1d. 悬停小名牌 Tooltip + 双击弹弓 HUD + 空中抓分粒子与弹窗 ── */
+    #pet-tooltip {
+      position: fixed; z-index: 40; display: none;
+      padding: 4px 10px; border-radius: 10px;
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(196, 181, 253, 0.72);
+      color: #2e1065; font-size: calc(11.5px * var(--pet-scale, 1)); font-weight: 700;
+      box-shadow: 0 4px 12px rgba(24, 18, 46, 0.16);
+      pointer-events: none; white-space: nowrap;
+    }
+    #pet-tooltip.is-on { display: block; }
+    #pet-tooltip .tip-sub { font-size: 10px; color: #64748b; font-weight: 600; margin-left: 5px; }
+
+    #slingshot-hud {
+      position: absolute; inset: 0; pointer-events: none; z-index: 35; display: none;
+    }
+    #slingshot-hud.is-on { display: block; }
+    #slingshot-svg { width: 100%; height: 100%; overflow: visible; }
+    #slingshot-badge {
+      position: absolute; left: 50%; top: 12%; transform: translateX(-50%);
+      padding: 3px 10px; border-radius: 999px;
+      background: rgba(24, 20, 42, 0.92); color: #fde68a;
+      border: 1.5px solid #f59e0b; font-size: 12px; font-weight: 800;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); white-space: nowrap;
+    }
+
+    .pet-score-burst { position: fixed; inset: 0; pointer-events: none; z-index: 50; }
+    .pet-score-particle { position: absolute; border-radius: 50%; pointer-events: none; }
+    .pet-score-popup {
+      position: fixed; z-index: 52; min-width: 128px; text-align: center;
+      background: rgba(255, 255, 255, 0.97);
+      border: 1.5px solid rgba(251, 191, 36, 0.75);
+      border-radius: 13px; padding: 7px 14px 8px;
+      box-shadow: 0 10px 28px rgba(24, 16, 40, 0.25);
+      pointer-events: none;
+      animation: scorePopIn 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .pet-score-val { font-size: 22px; font-weight: 800; color: #f59e0b; line-height: 1.15; }
+    .pet-score-rec {
+      display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px;
+      background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; font-size: 10px; font-weight: 800;
+      vertical-align: middle;
+    }
+    .pet-score-sub { font-size: 10.5px; color: #64748b; margin-top: 2px; font-weight: 600; }
+
+    /* ── 2. 多会话任务进度深色胶囊栈（单会话单条，多会话自动优雅堆叠） ── */
+    #task-stack {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      max-height: calc(100vh - var(--pet-h, 180px) - var(--bubble-lift, 18px) - 8px);
+      pointer-events: none;
+    }
+    #task-stack.is-on {
+      display: flex;
+    }
+
+    .task-overflow-badge {
+      padding: 2px 9px;
+      border-radius: 10px;
+      background: rgba(22, 21, 33, 0.86);
+      border: 1px solid rgba(167, 139, 250, 0.45);
+      color: rgba(226, 232, 240, 0.9);
+      font-size: 10.5px;
+      font-weight: 600;
+      pointer-events: auto;
+    }
+
+    .task-card {
+      display: flex;
+      flex-direction: column;
+      min-width: 176px;
+      max-width: 340px;
+      border-radius: 14px;
+      background: rgba(22, 21, 33, 0.94);
+      border: 1.5px solid rgba(167, 139, 250, 0.72);
+      color: #f4f4fc;
+      box-shadow: 0 5px 16px rgba(10, 8, 22, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+      pointer-events: auto;
+      overflow: hidden;
+      transition: border-color 0.2s ease, opacity 0.16s ease;
+    }
+    .task-card[data-agent="swarm"][data-state="thinking"],
+    .task-card[data-agent="swarm"][data-state="working"] {
+      background: linear-gradient(145deg, rgba(36, 24, 14, 0.95), rgba(24, 17, 12, 0.95));
+      border-color: rgba(251, 146, 60, 0.9);
+      box-shadow: 0 5px 18px rgba(245, 158, 11, 0.26), 0 0 0 1px rgba(253, 186, 116, 0.14) inset;
+    }
+    .task-card[data-agent="multi"][data-state="thinking"],
+    .task-card[data-agent="multi"][data-state="working"] {
+      background: linear-gradient(145deg, rgba(14, 30, 40, 0.95), rgba(12, 20, 32, 0.95));
+      border-color: rgba(34, 211, 238, 0.88);
+      box-shadow: 0 5px 18px rgba(34, 211, 238, 0.24), 0 0 0 1px rgba(103, 232, 249, 0.14) inset;
+    }
+    .task-card[data-state="done"] {
+      border-color: rgba(52, 211, 153, 0.82);
+    }
+    .task-card[data-state="error"] {
+      border-color: rgba(248, 113, 113, 0.85);
+    }
+    .task-card[data-state="waiting"] {
+      border-color: rgba(251, 191, 36, 0.85);
+    }
+
+    .task-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px 6px 10px;
+      cursor: pointer;
+    }
+    .task-pill-main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .task-caption-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .task-caption {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1.2;
+      color: rgba(196, 181, 253, 0.85);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-agent-chip {
+      flex: none;
+      display: none;
+      align-items: center;
+      gap: 2px;
+      padding: 0 5px;
+      height: 14px;
+      border-radius: 7px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+    .task-agent-chip.is-swarm {
+      display: inline-flex;
+      background: rgba(251, 146, 60, 0.22);
+      border: 1px solid rgba(251, 146, 60, 0.65);
+      color: #fed7aa;
+    }
+    .task-agent-chip.is-multi {
+      display: inline-flex;
+      background: rgba(34, 211, 238, 0.2);
+      border: 1px solid rgba(34, 211, 238, 0.62);
+      color: #a5f3fc;
+    }
+    .task-card[data-agent="swarm"] .task-caption {
+      color: rgba(253, 186, 116, 0.92);
+    }
+    .task-card[data-agent="multi"] .task-caption {
+      color: rgba(103, 232, 249, 0.92);
+    }
+    .task-card[data-state="done"] .task-caption {
+      color: rgba(110, 231, 183, 0.85);
+    }
+    .task-card[data-state="error"] .task-caption {
+      color: rgba(252, 165, 165, 0.88);
+    }
+    .task-card[data-state="waiting"] .task-caption {
+      color: rgba(253, 224, 71, 0.88);
+    }
+    .task-dot {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10.5px;
+      font-weight: 800;
+      color: #f5f3ff;
+      background: rgba(167, 139, 250, 0.28);
+      border: 1.5px solid #c084fc;
+      box-shadow: 0 0 8px rgba(192, 132, 252, 0.65);
+    }
+    .task-card[data-agent="swarm"] .task-dot {
+      color: #fff7ed;
+      background: rgba(251, 146, 60, 0.3);
+      border-color: #fb923c;
+      box-shadow: 0 0 9px rgba(251, 146, 60, 0.78);
+    }
+    .task-card[data-agent="multi"] .task-dot {
+      color: #ecfeff;
+      background: rgba(34, 211, 238, 0.28);
+      border-color: #22d3ee;
+      box-shadow: 0 0 9px rgba(34, 211, 238, 0.75);
+    }
+    .task-card[data-state="thinking"] .task-dot,
+    .task-card[data-state="working"] .task-dot {
+      animation: dotPulse 1.5s ease-in-out infinite;
+    }
+    .task-card[data-state="done"] .task-dot {
+      color: #ecfdf5;
+      background: rgba(52, 211, 153, 0.26);
+      border-color: #34d399;
+      box-shadow: 0 0 8px rgba(52, 211, 153, 0.65);
+    }
+    .task-card[data-state="error"] .task-dot {
+      color: #fef2f2;
+      background: rgba(248, 113, 113, 0.28);
+      border-color: #f87171;
+      box-shadow: 0 0 8px rgba(248, 113, 113, 0.65);
+    }
+    .task-card[data-state="waiting"] .task-dot {
+      color: #fffbeb;
+      background: rgba(251, 191, 36, 0.28);
+      border-color: #fbbf24;
+      box-shadow: 0 0 8px rgba(251, 191, 36, 0.65);
+    }
+
+    /* ── 2b. 人物头像上方数字圆圈模式（1 / 2 / 3 极简徽章 + 一键切换圆圈） ── */
+    .task-orb-dock {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      pointer-events: none;
+    }
+    .task-badge-tooltip {
+      display: none;
+      max-width: 280px;
+      padding: 4px 10px;
+      border-radius: 10px;
+      background: rgba(18, 17, 29, 0.95);
+      border: 1px solid rgba(167, 139, 250, 0.65);
+      color: #f4f4fc;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      box-shadow: 0 4px 14px rgba(8, 6, 20, 0.45);
+      pointer-events: none;
+      animation: popIn 0.14s ease-out;
+    }
+    .task-badge-tooltip.is-on {
+      display: block;
+    }
+    .task-badge-tooltip[data-agent="swarm"] {
+      border-color: rgba(251, 146, 60, 0.85);
+      color: #ffedd5;
+    }
+    .task-badge-tooltip[data-agent="multi"] {
+      border-color: rgba(34, 211, 238, 0.82);
+      color: #cffafe;
+    }
+    .task-badge-tooltip[data-state="done"] {
+      border-color: rgba(52, 211, 153, 0.8);
+      color: #d1fae5;
+    }
+    .task-badge-tooltip[data-state="error"] {
+      border-color: rgba(248, 113, 113, 0.82);
+      color: #fecaca;
+    }
+    .task-badge-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 3px 6px;
+      pointer-events: none;
+    }
+    .task-badge-item {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, rgba(30, 27, 48, 0.96), rgba(18, 16, 30, 0.96));
+      border: 1.8px solid rgba(167, 139, 250, 0.88);
+      color: #f3e8ff;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      pointer-events: auto;
+      box-shadow: 0 0 11px rgba(167, 139, 250, 0.48), 0 4px 10px rgba(8, 6, 18, 0.42);
+      transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.16s ease, border-color 0.2s ease;
+    }
+    .task-badge-item:hover {
+      transform: translateY(-2px) scale(1.1);
+      box-shadow: 0 0 16px rgba(167, 139, 250, 0.82), 0 6px 14px rgba(8, 6, 18, 0.5);
+    }
+    .task-badge-item[data-state="thinking"],
+    .task-badge-item[data-state="working"] {
+      animation: orbPulsePurple 1.8s ease-in-out infinite;
+    }
+    .task-badge-item[data-agent="swarm"][data-state="thinking"],
+    .task-badge-item[data-agent="swarm"][data-state="working"] {
+      background: linear-gradient(145deg, rgba(56, 32, 12, 0.97), rgba(34, 18, 8, 0.97));
+      border-color: rgba(251, 146, 60, 0.96);
+      color: #ffedd5;
+      box-shadow: 0 0 13px rgba(251, 146, 60, 0.62), 0 4px 10px rgba(22, 10, 4, 0.46);
+      animation: orbPulseSwarm 1.6s ease-in-out infinite;
+    }
+    .task-badge-item[data-agent="swarm"][data-state="thinking"]:hover,
+    .task-badge-item[data-agent="swarm"][data-state="working"]:hover {
+      box-shadow: 0 0 18px rgba(251, 146, 60, 0.92), 0 6px 14px rgba(22, 10, 4, 0.55);
+    }
+    .task-badge-item[data-agent="multi"][data-state="thinking"],
+    .task-badge-item[data-agent="multi"][data-state="working"] {
+      background: linear-gradient(145deg, rgba(12, 42, 54, 0.97), rgba(8, 24, 34, 0.97));
+      border-color: rgba(34, 211, 238, 0.95);
+      color: #cffafe;
+      box-shadow: 0 0 13px rgba(34, 211, 238, 0.58), 0 4px 10px rgba(4, 16, 24, 0.46);
+      animation: orbPulseMulti 1.7s ease-in-out infinite;
+    }
+    .task-badge-item[data-agent="multi"][data-state="thinking"]:hover,
+    .task-badge-item[data-agent="multi"][data-state="working"]:hover {
+      box-shadow: 0 0 18px rgba(34, 211, 238, 0.9), 0 6px 14px rgba(4, 16, 24, 0.55);
+    }
+    .task-badge-item[data-state="done"] {
+      background: linear-gradient(145deg, rgba(16, 44, 36, 0.96), rgba(11, 28, 24, 0.96));
+      border-color: rgba(52, 211, 153, 0.92);
+      color: #a7f3d0;
+      box-shadow: 0 0 11px rgba(52, 211, 153, 0.46), 0 4px 10px rgba(6, 18, 14, 0.42);
+      animation: none;
+    }
+    .task-badge-item[data-state="done"]:hover {
+      box-shadow: 0 0 16px rgba(52, 211, 153, 0.82), 0 6px 14px rgba(6, 18, 14, 0.5);
+    }
+    .task-badge-item[data-state="waiting"] {
+      background: linear-gradient(145deg, rgba(46, 36, 16, 0.96), rgba(28, 22, 10, 0.96));
+      border-color: rgba(251, 191, 36, 0.92);
+      color: #fde68a;
+      box-shadow: 0 0 11px rgba(251, 191, 36, 0.45), 0 4px 10px rgba(18, 12, 6, 0.42);
+    }
+    .task-badge-item[data-state="error"] {
+      background: linear-gradient(145deg, rgba(48, 20, 26, 0.96), rgba(28, 12, 16, 0.96));
+      border-color: rgba(248, 113, 113, 0.92);
+      color: #fecaca;
+      box-shadow: 0 0 11px rgba(248, 113, 113, 0.5), 0 4px 10px rgba(20, 8, 10, 0.42);
+      animation: none;
+    }
+    .task-badge-pip {
+      position: absolute;
+      right: -3px;
+      top: -3px;
+      min-width: 12px;
+      height: 12px;
+      padding: 0 2px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      font-weight: 900;
+      background: #c084fc;
+      color: #18122b;
+      box-shadow: 0 0 5px rgba(192, 132, 252, 0.9);
+      pointer-events: none;
+    }
+    .task-badge-item[data-agent="swarm"] .task-badge-pip {
+      background: #fb923c;
+      color: #431407;
+      box-shadow: 0 0 6px rgba(251, 146, 60, 0.95);
+    }
+    .task-badge-item[data-agent="multi"] .task-badge-pip {
+      background: #22d3ee;
+      color: #083344;
+      box-shadow: 0 0 6px rgba(34, 211, 238, 0.95);
+    }
+    .task-badge-item[data-state="done"] .task-badge-pip {
+      background: #34d399;
+      color: #052e16;
+      box-shadow: 0 0 5px rgba(52, 211, 153, 0.9);
+    }
+    .task-badge-item[data-state="error"] .task-badge-pip {
+      background: #f87171;
+      color: #450a0a;
+      box-shadow: 0 0 5px rgba(248, 113, 113, 0.9);
+    }
+    .task-badge-item[data-state="waiting"] .task-badge-pip {
+      background: #fbbf24;
+      color: #451a03;
+      box-shadow: 0 0 5px rgba(251, 191, 36, 0.9);
+    }
+
+    /* 圆形模式切换按钮（点击在“完整进度框”与“数字圆圈”之间一键切换） */
+    .task-mode-orb {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, rgba(34, 31, 54, 0.92), rgba(20, 18, 34, 0.92));
+      border: 1.5px solid rgba(196, 181, 253, 0.72);
+      color: #e9d5ff;
+      cursor: pointer;
+      pointer-events: auto;
+      box-shadow: 0 3px 10px rgba(10, 8, 22, 0.42), 0 0 8px rgba(167, 139, 250, 0.32);
+      transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+    }
+    .task-mode-orb svg {
+      width: 13px;
+      height: 13px;
+      display: block;
+      pointer-events: none;
+    }
+    .task-mode-orb:hover {
+      transform: scale(1.1);
+      border-color: #ddd6fe;
+      color: #ffffff;
+      box-shadow: 0 4px 12px rgba(10, 8, 22, 0.55), 0 0 12px rgba(167, 139, 250, 0.7);
+    }
+    .task-mode-orb.is-all-done {
+      border-color: rgba(52, 211, 153, 0.85);
+      color: #a7f3d0;
+      box-shadow: 0 3px 10px rgba(6, 18, 14, 0.42), 0 0 8px rgba(52, 211, 153, 0.36);
+    }
+
+    @keyframes orbPulsePurple {
+      0%, 100% { box-shadow: 0 0 9px rgba(167, 139, 250, 0.42), 0 4px 10px rgba(8, 6, 18, 0.42); }
+      50% { box-shadow: 0 0 16px rgba(192, 132, 252, 0.85), 0 4px 12px rgba(8, 6, 18, 0.5); }
+    }
+    @keyframes orbPulseSwarm {
+      0%, 100% { box-shadow: 0 0 10px rgba(251, 146, 60, 0.48), 0 4px 10px rgba(22, 10, 4, 0.45); }
+      50% { box-shadow: 0 0 18px rgba(245, 158, 11, 0.92), 0 4px 12px rgba(22, 10, 4, 0.55); }
+    }
+    @keyframes orbPulseMulti {
+      0%, 100% { box-shadow: 0 0 10px rgba(34, 211, 238, 0.45), 0 4px 10px rgba(4, 16, 24, 0.45); }
+      50% { box-shadow: 0 0 18px rgba(56, 189, 248, 0.9), 0 4px 12px rgba(4, 16, 24, 0.55); }
+    }
+
+    .task-tag {
+      flex: none;
+      max-width: 74px;
+      padding: 1px 5px;
+      border-radius: 6px;
+      background: rgba(167, 139, 250, 0.18);
+      color: #ddd6fe;
+      font-size: 10.5px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-card[data-state="done"] .task-tag {
+      background: rgba(52, 211, 153, 0.18);
+      color: #a7f3d0;
+    }
+
+    .task-status-row {
+      display: flex;
+      align-items: baseline;
+      gap: 5px;
+      min-width: 0;
+    }
+    .task-text {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #f4f4fc;
+    }
+    .task-time {
+      flex: none;
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(203, 213, 225, 0.82);
+      white-space: nowrap;
+    }
+    .task-btn {
+      flex: none;
+      border: none;
+      background: transparent;
+      color: rgba(215, 220, 236, 0.78);
+      font-size: 12px;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .task-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+
+    .task-body {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      padding: 0 11px 9px 11px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 11px;
+    }
+    .task-card.is-expanded .task-body {
+      display: flex;
+      max-height: 250px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    }
+    .task-card.is-expanded .task-body::-webkit-scrollbar {
+      width: 4px;
+    }
+    .task-card.is-expanded .task-body::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.24);
+      border-radius: 2px;
+    }
+    .task-head {
+      padding-top: 6px;
+      color: rgba(203, 213, 225, 0.88);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-bar {
+      height: 3px;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+      margin: 2px 0;
+    }
+    .task-bar-fill {
+      display: block;
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #a78bfa, #f472b6, #a78bfa);
+      background-size: 200% 100%;
+      animation: barFlow 1.6s linear infinite;
+    }
+    .task-card[data-agent="swarm"] .task-bar-fill {
+      background: linear-gradient(90deg, #f59e0b, #fb923c, #fcd34d, #f59e0b);
+      background-size: 200% 100%;
+    }
+    .task-card[data-agent="multi"] .task-bar-fill {
+      background: linear-gradient(90deg, #06b6d4, #38bdf8, #67e8f9, #06b6d4);
+      background-size: 200% 100%;
+    }
+    .task-card[data-state="done"] .task-bar-fill {
+      background: #34d399;
+      animation: none;
+    }
+    .task-card[data-state="error"] .task-bar-fill {
+      background: #f87171;
+      animation: none;
+    }
+    .task-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-top: 2px;
+    }
+    .task-step {
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.4;
+    }
+    .task-step.is-active {
+      color: #ddd6fe;
+      font-weight: 600;
+    }
+    .task-step.is-err {
+      color: #fca5a5;
+    }
+    .task-step.is-pending {
+      color: rgba(148, 163, 184, 0.78);
+    }
+    .task-step.is-child-head {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px dashed rgba(255, 255, 255, 0.12);
+      font-size: 10px;
+      font-weight: 700;
+      color: #fed7aa;
+    }
+    .task-step.is-child-head.is-multi {
+      color: #a5f3fc;
+    }
+    .task-step.is-child-swarm {
+      color: #ffedd5;
+      padding-left: 2px;
+    }
+    .task-step.is-child-multi {
+      color: #cffafe;
+      padding-left: 2px;
+    }
+    .task-link {
+      margin-top: 4px;
+      color: #6ee7b7;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .task-link:hover {
+      text-decoration: underline;
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(5px) scale(0.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes dotPulse {
+      0%, 100% { transform: scale(0.9); opacity: 0.7; }
+      50% { transform: scale(1.25); opacity: 1; }
+    }
+    @keyframes barFlow {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    @keyframes bubblePopOut {
+      0% { opacity: 1; transform: scale(1); }
+      45% { opacity: 0.92; transform: scale(1.1); }
+      100% { opacity: 0; transform: scale(0.55) translateY(-8px); }
+    }
+    @keyframes scorePopIn {
+      from { opacity: 0; transform: scale(0.58) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="scene">
+    <div id="bubble-anchor">
+      <div id="todo-panel">
+        <div class="todo-head">
+          <span>📝 贴身小待办</span>
+          <button type="button" class="mini-icon-btn" id="todo-close-btn" aria-label="收起 (悬停按 D)">×</button>
+        </div>
+        <div class="todo-input-row">
+          <input id="todo-input" class="todo-input" type="text" maxlength="60" placeholder="记一件待办，回车添加~" />
+          <button type="button" class="todo-add-btn" id="todo-add-btn">添加</button>
+        </div>
+        <div class="todo-due-row" id="todo-due-row">
+          <button type="button" class="todo-due-chip is-active" data-due="none">无期限</button>
+          <button type="button" class="todo-due-chip" data-due="15m">15分钟</button>
+          <button type="button" class="todo-due-chip" data-due="1h">1小时</button>
+          <button type="button" class="todo-due-chip" data-due="18h">今天18:00</button>
+        </div>
+        <div class="todo-list" id="todo-list"></div>
+      </div>
+
+      <div id="weather-card">
+        <div class="weather-head">
+          <span id="weather-city">🌤️ 正在查询天气…</span>
+          <div class="weather-acts">
+            <button type="button" class="mini-icon-btn" id="weather-refresh-btn" aria-label="刷新天气">↻</button>
+            <button type="button" class="mini-icon-btn" id="weather-close-btn" aria-label="关闭">×</button>
+          </div>
+        </div>
+        <div class="weather-main">
+          <div id="weather-svg-wrap" class="weather-svg"></div>
+          <div>
+            <div id="weather-temp" class="weather-temp">--°C</div>
+            <div id="weather-summary" class="weather-summary">获取中…</div>
+          </div>
+        </div>
+        <div class="weather-grid">
+          <div><b id="weather-apparent">--°C</b><span>体感</span></div>
+          <div><b id="weather-humidity">--%</b><span>湿度</span></div>
+          <div><b id="weather-wind">-- km/h</b><span>风速</span></div>
+        </div>
+        <div id="weather-tip" class="weather-tip">正在拉取当地气象数据喵~</div>
+      </div>
+
+      <div id="task-stack"></div>
+
+      <div id="whisper-wrap">
+        <img id="whisper-meme" alt="" draggable="false" />
+        <div id="whisper-bubble"></div>
+      </div>
+    </div>
+
+    <div id="pet-tooltip"></div>
+
+    <div id="pet-wrap">
+      <div id="slingshot-hud">
+        <svg id="slingshot-svg" viewBox="0 0 320 180"></svg>
+        <div id="slingshot-badge">🏹 蓄力 0%</div>
+      </div>
+      <div id="pet-body">
+        <video id="vid-a" class="pet-video is-front" muted playsinline preload="auto"></video>
+        <video id="vid-b" class="pet-video" muted playsinline preload="auto"></video>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ── dsh-pet 完整 114 条动画池定义（全部对齐实测 114 条透明版 WebM） ──
+    const ANIM_CFG = {
+      idle: ['待机呼吸休闲'],
+      turn: ['东张西望'],
+      drag: ['被鼠标拖拽悬空反馈'],
+      clicks: [
+        '点击回应-开心跃动',
+        '点击回应-元气挥手',
+        '点击回应-害羞惊讶',
+        '点击回应-傲娇生气',
+        '点击回应-挠痒咯咯笑',
+      ],
+      // 所有移动动画经逐帧实测：原生均面朝左（facingRight = false -> scaleX(1) 朝左，facingRight = true -> scaleX(-1) 朝右）
+      // leadSec/tailSec 按真实视频起跑/停步帧精确标定，确保窗口位移与人物迈步 100% 同步
+      moves: [
+        { name: '侧身急躁跑', minDist: 140, maxDist: 340, leadSec: 0.25, tailSec: 1.3 },
+        { name: '开心小跑', minDist: 90, maxDist: 240, leadSec: 0.9, tailSec: 2.7 },
+        { name: '螃蟹走路', minDist: 80, maxDist: 220, leadSec: 2.2, tailSec: 2.6 },
+        { name: '原地左转奔跑', minDist: 140, maxDist: 320, leadSec: 3.1, tailSec: 2.9 },
+        { name: '原地漂浮踏步', minDist: 50, maxDist: 150, leadSec: 1.0, tailSec: 1.2 },
+      ],
+      // 带汉字/符号的动作：朝右镜像时随机链自动跳过；手动点播时自动切回原样朝左，绝不出现倒字
+      noMirrorAnims: new Set(['是啊，吃什么', '深度思考碎碎念', '写福字', '吃Token']),
+      categories: [
+        {
+          id: '小动作',
+          weight: 20,
+          actions: [
+            '悠闲哼歌', '超大伸懒腰', '原地敲击桌面互动', '原地重力下蹲压缩', '哈欠连天',
+            '原地小憩沉眠', '女仆屈膝礼仪', '被吓一跳', '小幅度原地360度旋转展示',
+            '偷吃零食被抓住', '用鲸鱼尾巴拍打地面', '打瞌睡被惊醒', '照镜子', '整体换装试色',
+            '轻快记录', '写代码', '摇扇纳凉', '晨间刷牙',
+          ],
+        },
+        {
+          id: '玩耍',
+          weight: 22,
+          actions: [
+            '原地专心玩魔方', '原地蹲下玩玩具汽车', '鲸鱼吐泡泡特效', '原地跳跃抓碎头顶物品',
+            '玩游戏气急败坏', '玩水枪', '小提琴演奏', '蓝鲸现世', '优雅女仆舞', '轻快摇摆舞',
+            '可爱宅舞', '吹气球', '动物环绕', '放风筝', '拆礼物', '变鸽子', '扑克魔术',
+            '抽陀螺', '吹笛子', '蝴蝶蜜蜂环绕头顶开花', '撸猫', '凭空生花', '骑木马',
+            '三球抛接', '踢毽子', '下五子棋', '荡秋千',
+          ],
+        },
+        {
+          id: '干饭',
+          weight: 16,
+          actions: [
+            '吃白饭', '大口吃零食', '吃Token', '吃早餐', '吃午餐', '吃晚餐',
+            '吃冰淇淋融化', '吃大闸蟹', '吃糖葫芦', '吃长寿面', '吃西瓜', '涮火锅',
+            '期待开饭', '吃饭·碗饭', '吃饭团',
+          ],
+        },
+        {
+          id: '时节',
+          weight: 12,
+          actions: [
+            '被落叶淹没', '中秋赏月吃月饼', '堆雪人', '放烟花', '吃粽子', '吃年糕',
+            '吃青团', '吃腊八粥', '吃重阳糕', '收红包', '写福字', '穿针乞巧',
+            '舞狮头', '讨糖南瓜灯', '插茱萸赏菊', '放河灯', '萌化小幽灵', '装点圣诞树',
+            '放孔明灯', '吃汤圆', '吃饺子',
+          ],
+        },
+        {
+          id: '文字',
+          weight: 7,
+          noMirror: true,
+          actions: ['是啊，吃什么', '深度思考碎碎念'],
+        },
+      ],
+      workStatus: {
+        thinking: ['工作状态-思考冒泡', '深度思考碎碎念'],
+        working: ['工作状态-忙碌点按', '写代码', '工作状态-清点归档'],
+        waiting: ['工作状态-原地踱步张望'],
+        done: ['工作状态-雀跃庆祝'],
+        error: ['工作状态-垂头叹气冒汗'],
+      },
+      whisperAnims: ['碎碎念-擦桌碎碎念', '碎碎念-发呆碎碎念', '碎碎念-对屏碎碎念'],
+      balanceAnims: [
+        '余额-钱袋满溢', // 0..19% 已用
+        '余额-金袋叮当', // 20..39% 已用
+        '余额-钱袋如常', // 40..59% 已用
+        '余额-数金皱眉', // 60..79% 已用
+        '余额-袋空如洗', // 80..99% 已用
+        '余额-分文不剩', // 100% 已用
+      ],
+      sleep: {
+        start: '睡觉-开始',
+        loop: '睡觉-循环',
+        end: '睡觉-起来',
+      },
+      weights: { idle: 10, turn: 5, move: 8 },
+    };
+
+    const SLEEP_START_TEXTS = ['好困……我先睡一会儿喵~', '那我去打个盹啦，有事叫我~'];
+    const SLEEP_END_TEXTS = ['唔……我醒啦！继续陪{title}写代码✦', '睡饱饱能量满格，{title}早呀♪'];
+    const SLEEP_REFUSE_TEXTS = ['我在睡觉，别烦我……Zzz', '唔……再让我多睡五分钟嘛…', '呼……呼……（装作没听见）'];
+    const SLEEP_DREAM_TEXTS = ['Zzz… 大闸蟹别跑… 我就吃一口…', '呼噜呼噜… 编译 0 警告 0 错误…', 'Zzz… 额度都是我的… 嘿嘿…', '唔喵… 梦到好多好吃的饺子…'];
+    const BALANCE_TIER_TEXTS = [
+      { text: '钱袋满溢！额度超级充裕，放心冲鸭✦', meme: 'ciallo' },
+      { text: '金袋叮当响~ 额度很健康，稳稳干活♪', meme: 'cute' },
+      { text: '钱袋如常，额度用到一半啦，节奏刚刚好~', meme: 'token' },
+      { text: '数金皱眉… 额度有点紧了，省着点用喵！', meme: 'burn_token' },
+      { text: '袋空如洗！！额度告急，快要见底啦！', meme: 'tired' },
+      { text: '分文不剩了喵… 额度已被彻底用光(x_x)', meme: 'sleep' },
+    ];
+
+    const GENERAL_CHATTERS = [
+      { text: 'Ciallo~(∠・ω< )⌒★ 今天也在全力应援中！', meme: 'ciallo' },
+      { text: '额度给妈妈保管！不许再乱烧额度啦~', meme: 'token' },
+      { text: '呼哇…伸个大懒腰继续陪{title}肝代码~', meme: 'rice' },
+      { text: '异色瞳猫猫今天是不是超级清晰超级可爱✦', meme: 'cute' },
+      { text: '干饭时间到！今天想炫白饭、饺子还是大闸蟹呀？', meme: 'hungry' },
+      { text: '吨吨吨喝饱饱~ 干活效率直接翻倍♪', meme: 'full' },
+      { text: 'Zzz… 抱紧大尾巴打个盹，有事喊我一声喵~', meme: 'sleep' },
+      { text: '呀…突然好害羞，别一直盯着人家看啦(⁄ ⁄•⁄ω⁄•⁄ ⁄)', meme: 'tired' },
+      { text: '大的要来啦！快抓紧扶好，要出大事啦~', meme: 'big_coming' },
+      { text: '噼里啪啦肝代码中… Bug 退散！编译一次过！', meme: 'coding' },
+      { text: '已思考用时 13 秒… 哼，你才是大烧货呢！', meme: 'burn_token' },
+      { text: '哼！不理你了啦——除非夸我两句超级可爱！', meme: 'angry' },
+      { text: '咕咕咕~ 变出一只小鸽子，今日份摸鱼额度 +1！', meme: 'pigeon' },
+      { text: '真香警告！大闸蟹配代码，神仙都不换♪', meme: 'crab' },
+      { text: '下午茶来个冰淇淋~ 甜到快要融化掉啦！', meme: 'icecream' },
+      { text: '来你家蹭饭啦，保证就吃一碗（超大碗）！', meme: 'just_one_bowl' },
+      { text: '吃饱饱摸摸肚子~ 心满意足继续陪你写代码♪', meme: 'full_belly' },
+      { text: '热乎乎的大饺子香迷糊了，{title}也快去吃饭呀~', meme: 'dumpling' },
+      { text: '一口闷掉小饭团！能量满满重新开工✦', meme: 'onigiri' },
+      { text: '当当当~ 准备了小礼物送给{title}✦ 拆开看看嘛！', meme: 'gift' },
+      { text: '哈哈哈哈笑死喵了，今天心情直接拉满！', meme: 'laugh' },
+      { text: '哈啊——伸个大懒腰，快要困死喵啦…', meme: 'yawn' },
+      { text: '冲鸭！！Deadline 在前面追，猫猫全力加速中！', meme: 'rush' },
+      { text: '完蛋了！！不会不小心把用户重要文件删了吧（心虚）', meme: 'oops' },
+      { text: '盯——有情况！是谁在偷偷摸鱼被我抓到了？', meme: 'peek' },
+      { text: '早安喵~ 刷完牙元气满满，今天写代码零 Bug♪', meme: 'morning' },
+      { text: '秋风一吹被落叶埋起来了… 快来救救猫猫！', meme: 'leaves' },
+      { text: '摸鱼赏花中~ 除了卖萌陪聊，我超能打的好不好！', meme: 'flower' },
+      { text: '开源万岁！誓死践行开源精神，奥利给✦', meme: 'open_source' },
+      { text: '厉害了喵！今天也是在桌面上优雅漂浮的一天~', meme: 'paws' },
+      { text: '点我可以触发不同表情，拖拽我还能到处逛哦~', meme: 'ciallo' },
+    ];
+
+    const vidA = document.getElementById('vid-a');
+    const vidB = document.getElementById('vid-b');
+    const petWrap = document.getElementById('pet-wrap');
+    const petBody = document.getElementById('pet-body');
+    const taskStack = document.getElementById('task-stack');
+    const whisperWrap = document.getElementById('whisper-wrap');
+    const whisperMeme = document.getElementById('whisper-meme');
+    const whisperBubble = document.getElementById('whisper-bubble');
+    const petTooltip = document.getElementById('pet-tooltip');
+    const slingshotHud = document.getElementById('slingshot-hud');
+    const slingshotSvg = document.getElementById('slingshot-svg');
+    const slingshotBadge = document.getElementById('slingshot-badge');
+    const weatherCard = document.getElementById('weather-card');
+    const weatherCityEl = document.getElementById('weather-city');
+    const weatherSvgWrap = document.getElementById('weather-svg-wrap');
+    const weatherTempEl = document.getElementById('weather-temp');
+    const weatherSummaryEl = document.getElementById('weather-summary');
+    const weatherApparentEl = document.getElementById('weather-apparent');
+    const weatherHumidityEl = document.getElementById('weather-humidity');
+    const weatherWindEl = document.getElementById('weather-wind');
+    const weatherTipEl = document.getElementById('weather-tip');
+    const todoPanel = document.getElementById('todo-panel');
+    const todoInput = document.getElementById('todo-input');
+    const todoAddBtn = document.getElementById('todo-add-btn');
+    const todoDueRow = document.getElementById('todo-due-row');
+    const todoListEl = document.getElementById('todo-list');
+
+    const FONT_STACKS = {
+      youyuan: '"YouYuan", "幼圆", "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif',
+      yahei: '"Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif',
+      kaiti: '"KaiTi", "楷体", "STKaiti", "YouYuan", "Microsoft YaHei UI", sans-serif',
+      comic: '"Comic Sans MS", "YouYuan", "幼圆", "Microsoft YaHei UI", sans-serif',
+    };
+
+    // ── Q 弹点击音效引擎（dsh-pet 同款 100ms 防抖） ──
+    let lastSoundMs = 0;
+    const clickAudioBase = new Audio('/assets/click-duck.wav');
+    clickAudioBase.preload = 'auto';
+    clickAudioBase.volume = 0.45;
+    function playClickSound(vol = 0.45) {
+      if (!state.prefs.clickSoundEnabled) return;
+      const now = performance.now();
+      if (now - lastSoundMs < 95) return;
+      lastSoundMs = now;
+      try {
+        const a = clickAudioBase.cloneNode(true);
+        a.volume = Math.max(0.05, Math.min(1, vol));
+        a.play().catch(() => {});
+      } catch {}
+    }
+
+    const state = {
+      available: new Set(),
+      customExtras: [],
+      memes: {},
+      blobCache: new Map(),
+      frontIdx: 0,
+      swapGen: 0,
+      currentAnim: '',
+      currentOnce: false,
+      endedWatchdog: null,
+      lastPicked: '',
+      lastClickAnim: '',
+      lastWorkAnim: '',
+      lastWhisperAnim: '',
+      // 朝向与 dsh-pet 严格一致：facingRight = false (left) 为素材原样 scaleX(1)，true (right) 为镜像 scaleX(-1)
+      facingRight: false,
+      sleepPhase: 'awake', // 'awake' | 'starting' | 'sleeping' | 'waking'
+      sleepDreamTimer: null,
+      dragging: false,
+      throwing: false,
+      slingshotActive: false,
+      petSize: 320,
+      prefs: {
+        petName: '星璃喵',
+        userTitle: '老大',
+        fontFamily: 'youyuan',
+        clickSoundEnabled: true,
+        slingshotEnabled: true,
+        weatherCity: '',
+        bestCatchScore: 0,
+        autoPlay: true,
+        fixed: false,
+        workAnimEnabled: true,
+        chatterEnabled: true,
+        taskBubbleEnabled: true,
+      },
+      weatherData: null,
+      weatherOpen: false,
+      weatherAutoCloseTimer: null,
+      todoOpen: false,
+      todos: [],
+      todoDuePreset: 'none',
+      todoConfirmDelId: '',
+      scorePopupEl: null,
+      scorePopupTimer: null,
+      hovering: false,
+      telemetry: {
+        running: false,
+        workState: 'idle',
+        doneState: '',
+        tasks: [],
+      },
+      expandedTaskIds: new Set(),
+      compactTaskMode: (function () {
+        try { return localStorage.getItem('ag_cs_pet_compact_tasks') === '1'; } catch { return false; }
+      })(),
+      hoveredBadgeId: '',
+      lastTaskRenderSig: '',
+      lastHitRectsSig: '',
+      whisperTimer: null,
+      whisperForced: false,
+      lastChatterText: '',
+      recentMemeKeys: [],
+      chatterSchedule: null,
+      squashRaf: 0,
+      squashY: 1,
+      squashX: 1,
+      activeMoveToken: 0,
+    };
+
+    function postHost(msg) {
+      try {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(msg);
+        }
+      } catch {}
+    }
+
+    function applyBodyTransform() {
+      const flip = state.facingRight ? -1 : 1;
+      const sx = (state.squashX * flip).toFixed(4);
+      const sy = state.squashY.toFixed(4);
+      petBody.style.transform = `scale(${sx}, ${sy})`;
+    }
+
+    function triggerSquash(minSy = 0.68) {
+      if (state.squashRaf) cancelAnimationFrame(state.squashRaf);
+      const start = performance.now();
+      const dur = 240;
+      const step = (now) => {
+        const u = Math.min(1, (now - start) / dur);
+        let sy = 1;
+        if (u < 0.42) {
+          const p = u / 0.42;
+          sy = 1 - (1 - minSy) * p * p;
+        } else {
+          const p = (u - 0.42) / 0.58;
+          const c1 = 1.70158;
+          const c3 = c1 + 1;
+          const f = 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+          sy = Math.min(1.1, minSy + (1 - minSy) * Math.max(0, f));
+        }
+        state.squashY = sy;
+        state.squashX = 1 / Math.sqrt(Math.max(0.45, sy));
+        applyBodyTransform();
+        if (u < 1) {
+          state.squashRaf = requestAnimationFrame(step);
+        } else {
+          state.squashRaf = 0;
+          state.squashY = 1;
+          state.squashX = 1;
+          applyBodyTransform();
+        }
+      };
+      state.squashRaf = requestAnimationFrame(step);
+    }
+
+    const MAX_BLOB_CACHE = 24;
+    async function getBlobUrl(name) {
+      if (state.blobCache.has(name)) {
+        const hit = state.blobCache.get(name);
+        // LRU refresh
+        state.blobCache.delete(name);
+        state.blobCache.set(name, hit);
+        return hit;
+      }
+      const res = await fetch('/anims/webm/' + encodeURIComponent(name) + '.webm');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      state.blobCache.set(name, url);
+      if (state.blobCache.size > MAX_BLOB_CACHE) {
+        for (const [k, oldUrl] of state.blobCache.entries()) {
+          if (k === name || k === state.currentAnim || k === '待机呼吸休闲' || k === '被鼠标拖拽悬空反馈') continue;
+          state.blobCache.delete(k);
+          try { URL.revokeObjectURL(oldUrl); } catch {}
+          if (state.blobCache.size <= MAX_BLOB_CACHE) break;
+        }
+      }
+      return url;
+    }
+
+    function hasAnim(name) {
+      return state.available.has(name);
+    }
+
+    function pickFrom(list, avoid = '', respectMirror = false) {
+      let valid = list.filter((x) => hasAnim(x));
+      if (respectMirror && state.facingRight) {
+        const unmirrored = valid.filter((x) => !ANIM_CFG.noMirrorAnims.has(x));
+        if (unmirrored.length) valid = unmirrored;
+      }
+      if (!valid.length) return '';
+      if (valid.length === 1) return valid[0];
+      const pool = valid.filter((x) => x !== avoid);
+      const src = pool.length ? pool : valid;
+      return src[Math.floor(Math.random() * src.length)];
+    }
+
+    function clearEndedWatchdog() {
+      if (state.endedWatchdog) {
+        clearTimeout(state.endedWatchdog);
+        state.endedWatchdog = null;
+      }
+    }
+
+    async function switchAnim(name, once = false, onEndedCb = null, onPlayStartCb = null) {
+      if (!name || !hasAnim(name)) {
+        name = pickFrom(ANIM_CFG.idle) || Array.from(state.available)[0];
+        if (!name) return;
+      }
+      // 仅对“循环中”的同名动画去重；单次动作（含用户点播）始终重新播放一遍
+      if (!once && state.currentAnim === name && !state.currentOnce) {
+        const curEl = state.frontIdx === 0 ? vidA : vidB;
+        if (curEl && curEl.paused) {
+          try { curEl.play(); } catch {}
+        }
+        return;
+      }
+
+      clearEndedWatchdog();
+      const myGen = ++state.swapGen;
+      state.currentAnim = name;
+      state.currentOnce = once;
+
+      let url;
+      try {
+        url = await getBlobUrl(name);
+      } catch {
+        // 加载失败时绝不断链：自动回退随机/待机
+        if (myGen === state.swapGen) {
+          setTimeout(() => { if (myGen === state.swapGen) advanceChain(); }, 500);
+        }
+        return;
+      }
+      if (myGen !== state.swapGen) return;
+
+      const backIdx = state.frontIdx === 0 ? 1 : 0;
+      const backEl = backIdx === 0 ? vidA : vidB;
+      const frontEl = state.frontIdx === 0 ? vidA : vidB;
+
+      let endedHandled = false;
+      const fireEnded = () => {
+        if (endedHandled || myGen !== state.swapGen) return;
+        endedHandled = true;
+        clearEndedWatchdog();
+        backEl.onended = null;
+        if (onEndedCb) onEndedCb();
+        else advanceChain();
+      };
+
+      // 关键修复：onended 必须在 load/play 之前就绑定，避免丢事件导致播完卡死
+      backEl.onended = once ? fireEnded : null;
+      backEl.loop = !once;
+      backEl.muted = true;
+      backEl.playsInline = true;
+      backEl.src = url;
+      backEl.currentTime = 0;
+
+      const ready = await new Promise((resolve) => {
+        let done = false;
+        const finish = (ok) => {
+          if (done) return;
+          done = true;
+          backEl.onloadeddata = null;
+          backEl.onerror = null;
+          resolve(ok);
+        };
+        backEl.onloadeddata = () => finish(true);
+        backEl.onerror = () => finish(false);
+        setTimeout(() => finish(backEl.readyState >= 2), 2500);
+        backEl.load();
+      });
+      if (!ready || myGen !== state.swapGen) {
+        if (myGen === state.swapGen) {
+          setTimeout(() => { if (myGen === state.swapGen) advanceChain(); }, 400);
+        }
+        return;
+      }
+
+      try {
+        await backEl.play();
+      } catch {}
+      if (myGen !== state.swapGen) return;
+
+      // 等一帧确保新视频已绘制到合成层，杜绝闪烁
+      await new Promise((r) => requestAnimationFrame(() => r()));
+      if (myGen !== state.swapGen) return;
+
+      backEl.classList.add('is-front');
+      frontEl.classList.remove('is-front');
+      state.frontIdx = backIdx;
+
+      // 高空/高举类道具动画（放风筝、吹气球、变鸽子、动物环绕等）自动抬升上方气泡，彻底避免遮挡画面顶部
+      const isTallAnim = /放风筝|吹气球|变鸽子|动物环绕|气球|风筝|魔术|跃动|跳|飞|星|抛/.test(String(name || ''));
+      document.documentElement.style.setProperty('--bubble-lift', isTallAnim ? '38px' : '18px');
+
+      const actualDur = (Number.isFinite(backEl.duration) && backEl.duration > 0.5 && backEl.duration < 60)
+        ? backEl.duration
+        : 10.0;
+      if (onPlayStartCb) {
+        try { onPlayStartCb(actualDur); } catch {}
+      }
+
+      // 关键修复 2：单次动画挂防卡死看门狗（即使 Chromium 偶发不派发 ended，也 100% 自动切下一段随机动作）
+      if (once) {
+        const durMs = Math.round(actualDur * 1000) + 600;
+        state.endedWatchdog = setTimeout(() => fireEnded(), durMs);
+      }
+
+      setTimeout(() => {
+        if (!frontEl.classList.contains('is-front')) {
+          try { frontEl.pause(); } catch {}
+        }
+      }, 220);
+
+      reportHitRects();
+      setTimeout(reportHitRects, 310);
+    }
+
+    function cancelMove() {
+      state.activeMoveToken++;
+      postHost({ type: 'moveCancel' });
+    }
+
+    function clearSleepDreamTimer() {
+      if (state.sleepDreamTimer) {
+        clearTimeout(state.sleepDreamTimer);
+        state.sleepDreamTimer = null;
+      }
+    }
+
+    function scheduleSleepDream() {
+      clearSleepDreamTimer();
+      if (state.sleepPhase !== 'sleeping') return;
+      const delay = 48000 + Math.floor(Math.random() * 34000);
+      state.sleepDreamTimer = setTimeout(() => {
+        if (state.sleepPhase !== 'sleeping') return;
+        const hasTasks = state.telemetry.tasks && state.telemetry.tasks.length > 0;
+        if (state.prefs.chatterEnabled && !hasTasks) {
+          const line = SLEEP_DREAM_TEXTS[Math.floor(Math.random() * SLEEP_DREAM_TEXTS.length)];
+          showWhisper(line, 'sleep', 5200);
+        }
+        scheduleSleepDream();
+      }, delay);
+    }
+
+    function enterSleepMode() {
+      if (state.sleepPhase === 'starting' || state.sleepPhase === 'sleeping') return;
+      if (!hasAnim(ANIM_CFG.sleep.loop)) return;
+      cancelMove();
+      state.sleepPhase = 'starting';
+      postHost({ type: 'sleepState', sleeping: true });
+      const msg = SLEEP_START_TEXTS[Math.floor(Math.random() * SLEEP_START_TEXTS.length)];
+      showWhisper(msg, 'sleep', 4600, true);
+      if (hasAnim(ANIM_CFG.sleep.start)) {
+        switchAnim(ANIM_CFG.sleep.start, true, () => {
+          if (state.sleepPhase !== 'starting') return;
+          state.sleepPhase = 'sleeping';
+          switchAnim(ANIM_CFG.sleep.loop, false);
+          scheduleSleepDream();
+        });
+      } else {
+        state.sleepPhase = 'sleeping';
+        switchAnim(ANIM_CFG.sleep.loop, false);
+        scheduleSleepDream();
+      }
+    }
+
+    function wakeFromSleepMode(immediate = false) {
+      if (state.sleepPhase === 'awake' || state.sleepPhase === 'waking') return;
+      clearSleepDreamTimer();
+      if (immediate || !hasAnim(ANIM_CFG.sleep.end)) {
+        state.sleepPhase = 'awake';
+        postHost({ type: 'sleepState', sleeping: false });
+        if (!immediate) advanceChain();
+        return;
+      }
+      state.sleepPhase = 'waking';
+      postHost({ type: 'sleepState', sleeping: false });
+      const msg = SLEEP_END_TEXTS[Math.floor(Math.random() * SLEEP_END_TEXTS.length)];
+      showWhisper(msg, 'morning', 4600, true);
+      switchAnim(ANIM_CFG.sleep.end, true, () => {
+        state.sleepPhase = 'awake';
+        advanceChain();
+      });
+    }
+
+    function resolveWorkAnim() {
+      if (!state.prefs.workAnimEnabled) return null;
+      if (!state.telemetry.running) return null;
+      const ws = state.telemetry.workState;
+      const pool = ANIM_CFG.workStatus[ws];
+      if (!Array.isArray(pool) || !pool.length) return null;
+      const picked = pickFrom(pool, state.lastWorkAnim, true);
+      if (!picked) return null;
+      state.lastWorkAnim = picked;
+      // 多候选时播完一遍自动轮换，单候选循环播
+      const validCount = pool.filter((x) => hasAnim(x) && !(state.facingRight && ANIM_CFG.noMirrorAnims.has(x))).length;
+      return { name: picked, once: validCount > 1 };
+    }
+
+    function pickTimeThemedAction() {
+      const h = new Date().getHours();
+      let pool = [];
+      if (h >= 6 && h < 10) {
+        pool = ['晨间刷牙', '吃早餐', '吃饭团', '超大伸懒腰', '悠闲哼歌'];
+      } else if (h >= 11 && h < 14) {
+        pool = ['期待开饭', '吃午餐', '吃白饭', '吃饭·碗饭', '吃饺子', '吃长寿面', '吃大闸蟹'];
+      } else if (h >= 14 && h < 18) {
+        pool = ['吃冰淇淋融化', '吃西瓜', '大口吃零食', '摇扇纳凉', '吃糖葫芦', '吹气球', '撸猫', '玩水枪'];
+      } else if (h >= 18 && h < 21) {
+        pool = ['吃晚餐', '涮火锅', '吃大闸蟹', '放河灯', '放孔明灯'];
+      } else if (h >= 22 || h < 6) {
+        pool = ['哈欠连天', '打瞌睡被惊醒', '原地小憩沉眠', '放烟花', '中秋赏月吃月饼'];
+      }
+      return pool.length ? pickFrom(pool, state.lastPicked, true) : '';
+    }
+
+    function advanceChain() {
+      if (state.dragging || state.throwing) return;
+      if (state.sleepPhase !== 'awake') {
+        if (state.sleepPhase === 'sleeping') switchAnim(ANIM_CFG.sleep.loop, false);
+        return;
+      }
+      const work = resolveWorkAnim();
+      if (work) {
+        switchAnim(work.name, work.once, () => advanceChain());
+        return;
+      }
+      if (!state.prefs.autoPlay) {
+        switchAnim(pickFrom(ANIM_CFG.idle), false);
+        return;
+      }
+
+      const wIdle = ANIM_CFG.weights.idle;
+      const wTurn = state.prefs.fixed ? 0 : ANIM_CFG.weights.turn;
+      const wMove = state.prefs.fixed ? 0 : ANIM_CFG.weights.move;
+      const eligibleCats = ANIM_CFG.categories.filter((c) => !(c.noMirror && state.facingRight));
+      const cats = eligibleCats.length ? eligibleCats : ANIM_CFG.categories;
+      const catTotal = cats.reduce((s, c) => s + c.weight, 0);
+      const total = wIdle + wTurn + wMove + catTotal;
+      let r = Math.random() * total;
+
+      if (r < wIdle) {
+        const name = pickFrom(ANIM_CFG.idle);
+        state.lastPicked = name;
+        switchAnim(name, true);
+        return;
+      }
+      r -= wIdle;
+
+      if (r < wTurn) {
+        const name = pickFrom(ANIM_CFG.turn);
+        if (name) {
+          state.lastPicked = name;
+          switchAnim(name, true, () => {
+            state.facingRight = !state.facingRight;
+            applyBodyTransform();
+            advanceChain();
+          });
+          return;
+        }
+      }
+      r -= wTurn;
+
+      if (r < wMove) {
+        const validMoves = ANIM_CFG.moves.filter((m) => hasAnim(m.name));
+        if (validMoves.length) {
+          const mv = validMoves[Math.floor(Math.random() * validMoves.length)];
+          startMoveAction(mv);
+          return;
+        }
+      }
+      r -= wMove;
+
+      // 22% 概率触发当前时段应景彩蛋（早晨刷牙吃早餐、午间干饭、深夜打瞌睡等）
+      if (Math.random() < 0.22) {
+        const themed = pickTimeThemedAction();
+        if (themed) {
+          state.lastPicked = themed;
+          switchAnim(themed, true);
+          return;
+        }
+      }
+
+      let pickedCat = cats[0];
+      for (const cat of cats) {
+        if (r < cat.weight) {
+          pickedCat = cat;
+          break;
+        }
+        r -= cat.weight;
+      }
+      let pool = [...pickedCat.actions];
+      if (pickedCat.id === '小动作' && state.customExtras.length) {
+        pool = pool.concat(state.customExtras);
+      }
+      const next = pickFrom(pool, state.lastPicked, true) || pickFrom(ANIM_CFG.idle);
+      state.lastPicked = next;
+      switchAnim(next, true);
+    }
+
+    function startMoveAction(mv, forcedDir = 0) {
+      const token = ++state.activeMoveToken;
+      const scale = state.petSize / 462;
+      const dist = Math.round((mv.minDist + Math.random() * (mv.maxDist - mv.minDist)) * scale);
+      const dir = forcedDir === -1 || forcedDir === 1 ? forcedDir : (Math.random() < 0.5 ? -1 : 1);
+      // 所有移动素材原生朝左（dir=-1 时原样 scaleX(1)，dir=+1 时水平镜像 scaleX(-1) 朝右）
+      state.facingRight = dir > 0;
+      applyBodyTransform();
+      state.lastPicked = mv.name;
+      switchAnim(
+        mv.name,
+        true,
+        () => {
+          if (token === state.activeMoveToken) advanceChain();
+        },
+        (actualDurSec) => {
+          if (token !== state.activeMoveToken) return;
+          const leadSec = Number(mv.leadSec || 1.2);
+          const tailSec = Number(mv.tailSec || 1.4);
+          const moveDurSec = Math.max(0.8, actualDurSec - leadSec - tailSec);
+          postHost({
+            type: 'moveStart',
+            dir,
+            dist,
+            leadMs: Math.round(leadSec * 1000),
+            durationMs: Math.round(moveDurSec * 1000),
+          });
+        }
+      );
+    }
+
+    // 关键修复 3：1.2s 心跳自检，确保任何极端情况下视频停住/结束都能立刻自动恢复播下一段随机动画
+    setInterval(() => {
+      if (state.dragging || state.throwing || !state.available.size) return;
+      const frontEl = state.frontIdx === 0 ? vidA : vidB;
+      if (!frontEl || !frontEl.src) return;
+      if (frontEl.ended) {
+        advanceChain();
+      } else if (frontEl.paused && frontEl.readyState >= 2) {
+        frontEl.play().catch(() => advanceChain());
+      }
+    }, 1200);
+
+    // ── 多会话堆叠任务气泡渲染（按 task.id 原地复用 DOM + 空态防抖，彻底 0 闪烁！） ──
+    const taskCardMap = new Map(); // id -> { card, dot, cap, txt, toggleBtn, dismissBtn, head, stepsEl, jump, item }
+    const taskBadgeMap = new Map(); // id -> { btn, numEl, pipEl, item, index }
+    let overflowBadgeEl = null;
+    let orbDockEl = null;
+    let badgeTooltipEl = null;
+    let badgeRowEl = null;
+    let modeOrbBtn = null;
+    let emptyHideTimer = null;
+
+    function toggleCompactTaskMode() {
+      state.compactTaskMode = !state.compactTaskMode;
+      state.hoveredBadgeId = '';
+      try { localStorage.setItem('ag_cs_pet_compact_tasks', state.compactTaskMode ? '1' : '0'); } catch {}
+      triggerSquash(0.76);
+      state.lastTaskRenderSig = '';
+      syncBubbles(true);
+    }
+
+    function ensureOrbDock() {
+      if (orbDockEl && orbDockEl.parentElement === taskStack) return;
+      orbDockEl = document.createElement('div');
+      orbDockEl.className = 'task-orb-dock';
+
+      badgeTooltipEl = document.createElement('div');
+      badgeTooltipEl.className = 'task-badge-tooltip';
+      orbDockEl.appendChild(badgeTooltipEl);
+
+      badgeRowEl = document.createElement('div');
+      badgeRowEl.className = 'task-badge-row';
+      orbDockEl.appendChild(badgeRowEl);
+
+      modeOrbBtn = document.createElement('button');
+      modeOrbBtn.type = 'button';
+      modeOrbBtn.className = 'task-mode-orb';
+      modeOrbBtn.setAttribute('data-bubble-act', 'toggle-compact');
+      modeOrbBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.lastHandledClickMs && Date.now() - state.lastHandledClickMs < 220) return;
+        state.lastHandledClickMs = Date.now();
+        toggleCompactTaskMode();
+      });
+      badgeRowEl.appendChild(modeOrbBtn);
+      taskStack.appendChild(orbDockEl);
+    }
+
+    function resolveAgentMode(item) {
+      const m = String(item && item.agentMode ? item.agentMode : '').trim();
+      if (m === 'swarm' || m === 'multi') return m;
+      if (Number(item && item.subagentRunning || 0) > 0 || Number(item && item.subagentTotal || 0) > 0) return 'multi';
+      return 'single';
+    }
+    function formatAgentBadgeTag(item) {
+      const m = resolveAgentMode(item);
+      const run = Number(item && item.subagentRunning || 0);
+      const tot = Math.max(run, Number(item && item.subagentTotal || 0));
+      if (m === 'swarm') {
+        if (run > 0 && tot > 0) return `🐝蜂群 ${run}/${tot}`;
+        if (tot > 0) return `🐝蜂群 ${tot}`;
+        return '🐝蜂群';
+      }
+      if (m === 'multi') {
+        if (run > 0) return `🤖多代理 ${run}`;
+        if (tot > 0) return `🤖多代理 ${tot}`;
+        return '🤖多代理';
+      }
+      return '';
+    }
+
+    function createTaskBadgeRecord(id) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'task-badge-item';
+      btn.setAttribute('data-task-id', id);
+      btn.setAttribute('data-bubble-act', 'badge-jump');
+
+      const numEl = document.createElement('span');
+      btn.appendChild(numEl);
+
+      const pipEl = document.createElement('span');
+      pipEl.className = 'task-badge-pip';
+      btn.appendChild(pipEl);
+
+      const rec = { btn, numEl, pipEl, item: null, index: 1 };
+
+      btn.addEventListener('mouseenter', () => {
+        if (!rec.item || !badgeTooltipEl) return;
+        state.hoveredBadgeId = rec.item.id;
+        const st = rec.item.running ? (rec.item.workState || 'working') : (rec.item.doneState || 'done');
+        const agMode = resolveAgentMode(rec.item);
+        const agPrefix = formatAgentBadgeTag(rec.item);
+        const title = (rec.item.taskTitle || rec.item.shortTitle || '会话任务').trim();
+        const status = String(rec.item.statusText || '').trim();
+        badgeTooltipEl.setAttribute('data-state', st);
+        badgeTooltipEl.setAttribute('data-agent', agMode);
+        badgeTooltipEl.textContent = `#${rec.index}${agPrefix ? ' [' + agPrefix + ']' : ''} ${title}${status ? ' · ' + status : ''}`;
+        badgeTooltipEl.classList.add('is-on');
+        requestAnimationFrame(reportHitRects);
+      });
+      btn.addEventListener('mouseleave', () => {
+        if (state.hoveredBadgeId === id) state.hoveredBadgeId = '';
+        if (badgeTooltipEl) {
+          badgeTooltipEl.classList.remove('is-on');
+          requestAnimationFrame(reportHitRects);
+        }
+      });
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.lastHandledClickMs && Date.now() - state.lastHandledClickMs < 220) return;
+        state.lastHandledClickMs = Date.now();
+        if (rec.item) activateAndMaybeDismissTask(rec.item);
+      });
+
+      return rec;
+    }
+
+    function dismissTaskImmediately(cur) {
+      if (!cur) return;
+      state.expandedTaskIds.delete(cur.id);
+      state.telemetry.tasks = state.telemetry.tasks.filter((x) => x.id !== cur.id);
+      syncBubbles(true);
+      postHost({ type: 'dismissTask', id: cur.id, steps: Number(cur.steps || 0), running: Boolean(cur.running) });
+    }
+
+    function activateAndMaybeDismissTask(cur) {
+      if (!cur) return;
+      postHost({
+        type: 'activateAgy',
+        id: cur.id || '',
+        windowTitle: cur.windowTitle || '',
+        taskTitle: cur.taskTitle || cur.shortTitle || '',
+      });
+      if (!cur.running) {
+        dismissTaskImmediately(cur);
+      }
+    }
+
+    function createTaskCardRecord(id) {
+      const card = document.createElement('div');
+      card.className = 'task-card';
+      card.setAttribute('data-task-id', id);
+
+      const pill = document.createElement('div');
+      pill.className = 'task-pill';
+
+      const dot = document.createElement('span');
+      dot.className = 'task-dot';
+      pill.appendChild(dot);
+
+      const mainCol = document.createElement('div');
+      mainCol.className = 'task-pill-main';
+
+      const capRow = document.createElement('div');
+      capRow.className = 'task-caption-row';
+
+      const cap = document.createElement('span');
+      cap.className = 'task-caption';
+      capRow.appendChild(cap);
+
+      const agentChip = document.createElement('span');
+      agentChip.className = 'task-agent-chip';
+      capRow.appendChild(agentChip);
+
+      mainCol.appendChild(capRow);
+
+      const statusRow = document.createElement('div');
+      statusRow.className = 'task-status-row';
+
+      const txt = document.createElement('span');
+      txt.className = 'task-text';
+      statusRow.appendChild(txt);
+
+      const timeEl = document.createElement('span');
+      timeEl.className = 'task-time';
+      statusRow.appendChild(timeEl);
+
+      mainCol.appendChild(statusRow);
+      pill.appendChild(mainCol);
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'task-btn task-btn-toggle';
+      toggleBtn.setAttribute('data-bubble-act', 'toggle');
+      toggleBtn.setAttribute('aria-label', '展开/收起步骤详情');
+      pill.appendChild(toggleBtn);
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button';
+      dismissBtn.className = 'task-btn task-btn-dismiss';
+      dismissBtn.setAttribute('data-bubble-act', 'dismiss');
+      dismissBtn.setAttribute('aria-label', '关闭此进度提示');
+      dismissBtn.textContent = '×';
+      pill.appendChild(dismissBtn);
+
+      const rec = { card, dot, cap, agentChip, txt, timeEl, toggleBtn, dismissBtn, head: null, stepsEl: null, jump: null, item: null, lastStepsSig: '' };
+
+      pill.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.lastHandledClickMs && Date.now() - state.lastHandledClickMs < 220) return;
+        state.lastHandledClickMs = Date.now();
+        const cur = rec.item;
+        if (!cur) return;
+        const t = ev.target;
+        if (t === dismissBtn || (t && t.closest && t.closest('[data-bubble-act="dismiss"]'))) {
+          dismissTaskImmediately(cur);
+          return;
+        }
+        if (t === toggleBtn || (t && t.closest && t.closest('[data-bubble-act="toggle"]'))) {
+          if (state.expandedTaskIds.has(cur.id)) state.expandedTaskIds.delete(cur.id);
+          else state.expandedTaskIds.add(cur.id);
+          syncBubbles(true);
+          return;
+        }
+        // Clicking the capsule body: immediately jump to the conversation window (and dismiss if completed/error)
+        activateAndMaybeDismissTask(cur);
+      });
+
+      card.appendChild(pill);
+
+      const body = document.createElement('div');
+      body.className = 'task-body';
+
+      const head = document.createElement('div');
+      head.className = 'task-head';
+      body.appendChild(head);
+      rec.head = head;
+
+      const bar = document.createElement('div');
+      bar.className = 'task-bar';
+      const fill = document.createElement('span');
+      fill.className = 'task-bar-fill';
+      bar.appendChild(fill);
+      body.appendChild(bar);
+
+      const stepsEl = document.createElement('div');
+      stepsEl.className = 'task-steps';
+      body.appendChild(stepsEl);
+      rec.stepsEl = stepsEl;
+
+      const jump = document.createElement('div');
+      jump.className = 'task-link';
+      jump.setAttribute('data-bubble-act', 'activate');
+      jump.textContent = '点击跳转到该会话窗口 ↗';
+      jump.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.lastHandledClickMs && Date.now() - state.lastHandledClickMs < 220) return;
+        state.lastHandledClickMs = Date.now();
+        activateAndMaybeDismissTask(rec.item);
+      });
+      body.appendChild(jump);
+      rec.jump = jump;
+
+      card.appendChild(body);
+      return rec;
+    }
+
+    function syncBubbles(immediateEmpty = false) {
+      const list = state.prefs.taskBubbleEnabled && Array.isArray(state.telemetry.tasks)
+        ? state.telemetry.tasks.filter((x) => x && x.statusText)
+        : [];
+
+      if (list.length === 0) {
+        if (taskStack.classList.contains('is-on') || taskCardMap.size > 0 || taskBadgeMap.size > 0) {
+          const doClear = () => {
+            if (emptyHideTimer) {
+              clearTimeout(emptyHideTimer);
+              emptyHideTimer = null;
+            }
+            taskStack.classList.remove('is-on');
+            taskStack.innerHTML = '';
+            taskCardMap.clear();
+            taskBadgeMap.clear();
+            overflowBadgeEl = null;
+            orbDockEl = null;
+            badgeTooltipEl = null;
+            badgeRowEl = null;
+            modeOrbBtn = null;
+            state.hoveredBadgeId = '';
+            state.lastTaskRenderSig = '';
+            requestAnimationFrame(reportHitRects);
+          };
+          if (immediateEmpty) {
+            doClear();
+          } else if (!emptyHideTimer) {
+            emptyHideTimer = setTimeout(() => {
+              emptyHideTimer = null;
+              const curList = state.prefs.taskBubbleEnabled && Array.isArray(state.telemetry.tasks)
+                ? state.telemetry.tasks.filter((x) => x && x.statusText)
+                : [];
+              if (curList.length > 0) return;
+              doClear();
+            }, 350);
+          }
+        }
+        return;
+      }
+
+      if (emptyHideTimer) {
+        clearTimeout(emptyHideTimer);
+        emptyHideTimer = null;
+      }
+
+      if (!state.whisperForced) {
+        whisperWrap.classList.remove('is-on');
+      }
+
+      const isCompact = Boolean(state.compactTaskMode);
+      const maxVisible = isCompact ? 8 : 4;
+      const visible = list.slice(0, maxVisible);
+      const overflow = Math.max(0, list.length - maxVisible);
+
+      const sig = JSON.stringify({
+        isCompact,
+        overflow,
+        expanded: Array.from(state.expandedTaskIds),
+        visible: visible.map((x) => [
+          x.id, x.workState, x.running, x.doneState, x.statusText, x.taskTitle, x.shortTitle,
+          x.agentMode || 'single', x.subagentRunning || 0, x.subagentTotal || 0,
+          x.detailLines, x.childLines,
+        ]),
+      });
+      if (sig === state.lastTaskRenderSig) return;
+      state.lastTaskRenderSig = sig;
+
+      // 1. 维护顶部溢出提示（仅完整卡片模式或超出8个圆圈时显示）
+      if (overflow > 0) {
+        if (!overflowBadgeEl) {
+          overflowBadgeEl = document.createElement('div');
+          overflowBadgeEl.className = 'task-overflow-badge';
+          taskStack.insertBefore(overflowBadgeEl, taskStack.firstChild);
+        }
+        overflowBadgeEl.textContent = `+${overflow} 个其他并发会话`;
+      } else if (overflowBadgeEl) {
+        overflowBadgeEl.remove();
+        overflowBadgeEl = null;
+      }
+
+      // 2. 移除已不在列表中的卡片
+      const keepIds = new Set(visible.map((x) => x.id));
+      for (const [id, rec] of Array.from(taskCardMap.entries())) {
+        if (!keepIds.has(id)) {
+          rec.card.remove();
+          taskCardMap.delete(id);
+        }
+      }
+      for (const [id, bRec] of Array.from(taskBadgeMap.entries())) {
+        if (!keepIds.has(id)) {
+          bRec.btn.remove();
+          taskBadgeMap.delete(id);
+        }
+      }
+
+      // 3. 原地更新已有卡片 / 仅新增缺失卡片，并保持顺序
+      let layoutChanged = false;
+      for (let i = 0; i < visible.length; i++) {
+        const item = visible[i];
+        let rec = taskCardMap.get(item.id);
+        if (!rec) {
+          rec = createTaskCardRecord(item.id);
+          taskCardMap.set(item.id, rec);
+          if (orbDockEl && orbDockEl.parentElement === taskStack) {
+            taskStack.insertBefore(rec.card, orbDockEl);
+          } else {
+            taskStack.appendChild(rec.card);
+          }
+          layoutChanged = true;
+        }
+        rec.item = item;
+        rec.card.style.display = isCompact ? 'none' : '';
+        if (rec.dot) rec.dot.textContent = String(i + 1);
+
+        const st = item.running ? (item.workState || 'working') : (item.doneState || 'done');
+        const agMode = resolveAgentMode(item);
+        if (rec.card.getAttribute('data-state') !== st) rec.card.setAttribute('data-state', st);
+        if (rec.card.getAttribute('data-agent') !== agMode) rec.card.setAttribute('data-agent', agMode);
+        const isExpanded = state.expandedTaskIds.has(item.id);
+        if (rec.card.classList.contains('is-expanded') !== isExpanded) {
+          rec.card.classList.toggle('is-expanded', isExpanded);
+          layoutChanged = true;
+        }
+
+        const captionText = (item.taskTitle || item.shortTitle || '').trim();
+        if (captionText) {
+          if (rec.cap.style.display === 'none') rec.cap.style.display = '';
+          if (rec.cap.textContent !== captionText) rec.cap.textContent = captionText;
+        } else {
+          rec.cap.style.display = 'none';
+        }
+        if (rec.agentChip) {
+          const chipTxt = formatAgentBadgeTag(item);
+          rec.agentChip.className = 'task-agent-chip' + (agMode === 'swarm' ? ' is-swarm' : agMode === 'multi' ? ' is-multi' : '');
+          if (rec.agentChip.textContent !== chipTxt) rec.agentChip.textContent = chipTxt;
+        }
+
+        const rawStatus = String(item.statusText || '');
+        const timeMatch = rawStatus.match(/^(.*?)\s*(\(\d+s\))$/);
+        const rawMain = timeMatch ? timeMatch[1].trim() : rawStatus;
+        const mainStatusText = humanizeWorkStatus(rawMain, st);
+        const timeText = timeMatch ? timeMatch[2] : '';
+        if (rec.txt.textContent !== mainStatusText) rec.txt.textContent = mainStatusText;
+        if (rec.timeEl.textContent !== timeText) rec.timeEl.textContent = timeText;
+        rec.timeEl.style.display = timeText ? '' : 'none';
+        const chev = isExpanded ? '▴' : '▾';
+        if (rec.toggleBtn.textContent !== chev) rec.toggleBtn.textContent = chev;
+
+        // Always keep × close button visible so user can dismiss any task card at any time
+        rec.dismissBtn.style.display = 'inline-block';
+
+        const headTxt = item.taskTitle || item.shortTitle || '当前任务进度';
+        if (rec.head.textContent !== headTxt) rec.head.textContent = headTxt;
+
+        const childLines = Array.isArray(item.childLines) ? item.childLines.slice(0, 8) : [];
+        const rawDetailLines = Array.isArray(item.detailLines) ? item.detailLines : [];
+        const lines = childLines.length > 0 ? rawDetailLines.slice(-3) : rawDetailLines.slice(0, 6);
+        const stepsSig = lines.join('\n') + '||' + childLines.join('\n') + '||' + agMode;
+        if (rec.lastStepsSig !== stepsSig) {
+          rec.lastStepsSig = stepsSig;
+          rec.stepsEl.innerHTML = '';
+          for (const line of lines) {
+            const row = document.createElement('div');
+            row.className = 'task-step' + (line.startsWith('⟳') ? ' is-active' : line.startsWith('!') ? ' is-err' : (line.startsWith('○') || line.startsWith('–') || line.startsWith('·')) ? ' is-pending' : '');
+            row.textContent = line;
+            rec.stepsEl.appendChild(row);
+          }
+          if (childLines.length > 0) {
+            const headRow = document.createElement('div');
+            headRow.className = 'task-step is-child-head' + (agMode === 'multi' ? ' is-multi' : '');
+            const runC = Number(item.subagentRunning || 0);
+            const totC = Math.max(runC, Number(item.subagentTotal || childLines.length));
+            headRow.textContent = agMode === 'swarm'
+              ? `🐝 已折叠蜂群成员 (${runC > 0 ? `${runC}/${totC} 运行中` : `共 ${totC}`})`
+              : `🤖 已折叠子代理 (${runC > 0 ? `${runC}/${totC} 运行中` : `共 ${totC}`})`;
+            rec.stepsEl.appendChild(headRow);
+            for (const cLine of childLines) {
+              const cRow = document.createElement('div');
+              cRow.className = 'task-step ' + (agMode === 'swarm' ? 'is-child-swarm' : 'is-child-multi');
+              cRow.textContent = cLine;
+              rec.stepsEl.appendChild(cRow);
+            }
+          }
+        }
+        rec.jump.style.display = 'block';
+      }
+
+      // 4. 维护人物头顶的数字圆圈栏（1 / 2 / 3）与圆圈切换按钮
+      ensureOrbDock();
+      const anyRunning = visible.some((x) => x.running);
+      for (let i = 0; i < visible.length; i++) {
+        const item = visible[i];
+        let bRec = taskBadgeMap.get(item.id);
+        if (!bRec) {
+          bRec = createTaskBadgeRecord(item.id);
+          taskBadgeMap.set(item.id, bRec);
+          badgeRowEl.insertBefore(bRec.btn, modeOrbBtn);
+        }
+        bRec.item = item;
+        bRec.index = i + 1;
+        bRec.numEl.textContent = String(i + 1);
+        const st = item.running ? (item.workState || 'working') : (item.doneState || 'done');
+        const agMode = resolveAgentMode(item);
+        const agTag = formatAgentBadgeTag(item);
+        bRec.btn.setAttribute('data-state', st);
+        bRec.btn.setAttribute('data-agent', agMode);
+        if (st === 'done') bRec.pipEl.textContent = '✓';
+        else if (st === 'error') bRec.pipEl.textContent = '!';
+        else if (st === 'waiting') bRec.pipEl.textContent = '?';
+        else if (agMode === 'swarm') bRec.pipEl.textContent = Number(item.subagentRunning || 0) > 0 ? String(item.subagentRunning) : '🐝';
+        else if (agMode === 'multi') bRec.pipEl.textContent = Number(item.subagentRunning || 0) > 0 ? String(item.subagentRunning) : '🤖';
+        else bRec.pipEl.textContent = '✦';
+        const title = (item.taskTitle || item.shortTitle || '会话任务').trim();
+        const status = String(item.statusText || '').trim();
+        bRec.btn.setAttribute('aria-label', `#${i + 1}${agTag ? ' [' + agTag + ']' : ''} ${title}${status ? ' · ' + status : ''}`);
+        bRec.btn.removeAttribute('title');
+        bRec.btn.style.display = isCompact ? 'inline-flex' : 'none';
+        if (isCompact && state.hoveredBadgeId === item.id && badgeTooltipEl) {
+          badgeTooltipEl.setAttribute('data-state', st);
+          badgeTooltipEl.setAttribute('data-agent', agMode);
+          badgeTooltipEl.textContent = `#${i + 1}${agTag ? ' [' + agTag + ']' : ''} ${title}${status ? ' · ' + status : ''}`;
+          badgeTooltipEl.classList.add('is-on');
+        }
+      }
+      if (!isCompact && badgeTooltipEl) {
+        badgeTooltipEl.classList.remove('is-on');
+      }
+      if (modeOrbBtn) {
+        const expandSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="4.5" x2="13" y2="4.5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11.5" x2="10" y2="11.5"/></svg>';
+        const collapseSvg = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4.5 6.5 8 10 11.5 6.5"/><circle cx="8" cy="12.5" r="0.9" fill="currentColor" stroke="none"/></svg>';
+        const targetIcon = isCompact ? expandSvg : collapseSvg;
+        if (modeOrbBtn.innerHTML !== targetIcon) modeOrbBtn.innerHTML = targetIcon;
+        modeOrbBtn.setAttribute('aria-label', isCompact ? '展开全部任务进度条' : '收起为人物头顶数字圆圈');
+        modeOrbBtn.removeAttribute('title');
+        modeOrbBtn.classList.toggle('is-all-done', !anyRunning);
+      }
+
+      if (!taskStack.classList.contains('is-on')) {
+        taskStack.classList.add('is-on');
+      }
+      // Always re-measure hit rects after any card text/layout update (deduplicated inside reportHitRects)
+      // so Win32 Form.Region never clips cards when an existing card grows wider or shifts vertically.
+      requestAnimationFrame(reportHitRects);
+    }
+
+    function getUserTitle() {
+      const t = String((state.prefs && state.prefs.userTitle) || '').trim();
+      return t || '老大';
+    }
+
+    function formatTitleText(text) {
+      return String(text || '').replace(/\{title\}/g, getUserTitle());
+    }
+
+    function showWhisper(text, memeKey = '', durationMs = 5200, force = false) {
+      if (!force && state.prefs.taskBubbleEnabled && state.telemetry.tasks && state.telemetry.tasks.length > 0) return;
+      if (state.whisperTimer) clearTimeout(state.whisperTimer);
+      state.whisperForced = Boolean(force);
+      whisperBubble.textContent = formatTitleText(text);
+      const memeUri = memeKey && state.memes[memeKey] ? state.memes[memeKey] : '';
+      if (memeUri) {
+        whisperMeme.src = memeUri;
+        whisperMeme.classList.add('is-on');
+      } else {
+        whisperMeme.classList.remove('is-on');
+        whisperMeme.removeAttribute('src');
+      }
+      whisperWrap.classList.remove('is-on');
+      void whisperWrap.offsetWidth;
+      whisperWrap.classList.add('is-on');
+      requestAnimationFrame(reportHitRects);
+      setTimeout(reportHitRects, 220);
+      state.whisperTimer = setTimeout(() => {
+        whisperWrap.classList.remove('is-on');
+        state.whisperTimer = null;
+        state.whisperForced = false;
+        requestAnimationFrame(reportHitRects);
+      }, durationMs);
+    }
+
+    function pickTimeAwareChatter(preferMeme = true) {
+      const h = new Date().getHours();
+      const pool = [];
+      if (h >= 7 && h < 10) {
+        pool.push({ text: '早安{title}~ 刷完牙吃饱早餐，写代码零 Bug 呀♪', meme: 'morning' });
+        pool.push({ text: '一口闷掉元气饭团！早上好呀{title}✦', meme: 'onigiri' });
+        pool.push({ text: '新的一天也要全力冲鸭！！', meme: 'rush' });
+      } else if (h >= 11 && h < 14) {
+        pool.push({ text: '午饭时间到！今天吃大闸蟹、饺子还是米饭呀~', meme: 'crab' });
+        pool.push({ text: '保证就吃一碗！绝不多盛第二碗（大概）！', meme: 'just_one_bowl' });
+        pool.push({ text: '热腾腾的大饺子香迷糊啦，快去干饭！', meme: 'dumpling' });
+        pool.push({ text: '干饭要紧！吃完摸摸肚子再继续肝代码♪', meme: 'full_belly' });
+      } else if (h >= 14 && h < 18) {
+        pool.push({ text: '下午啦~ 来个冰淇淋提提神，别融化咯！', meme: 'icecream' });
+        pool.push({ text: '下午摸鱼赏花时间到~ 歇两分钟再继续吧♪', meme: 'flower' });
+        pool.push({ text: '咕咕咕~ 下午茶时间要不要先休息一下呀？', meme: 'pigeon' });
+      } else if (h >= 18 && h < 21) {
+        pool.push({ text: '傍晚啦！{title}晚饭吃好点，我先帮你守着额度~', meme: 'token' });
+        pool.push({ text: '还在肝代码呀？注意别把额度烧太猛，适度休息哦~', meme: 'burn_token' });
+        pool.push({ text: '干完这波就去炫饭饭！今天辛苦啦✦', meme: 'hungry' });
+      } else if (h >= 22 || h < 6) {
+        pool.push({ text: '很晚啦{title}，别熬太久，记得保存代码早点睡哦…', meme: 'sleep' });
+        pool.push({ text: '哈啊——猫猫都要困死喵啦，{title}也快休息吧…', meme: 'yawn' });
+        pool.push({ text: '深夜代码局！但也要注意眼睛和睡眠呀~', meme: 'coding' });
+      }
+      if (state.weatherData && state.weatherData.ok && Math.random() < 0.16) {
+        const w = state.weatherData;
+        if (w.icon === 'rain' || w.icon === 'storm') {
+          return { text: `${w.city}现在${w.summary}（${w.temperatureC}°C），出门别忘带伞喵☂`, meme: 'cute' };
+        }
+        if (w.temperatureC <= 10) {
+          return { text: `${w.city}才 ${w.temperatureC}°C 呢，{title}注意保暖多喝热水☕`, meme: 'tired' };
+        }
+      }
+      const all = pool.length && Math.random() < 0.35 ? pool : GENERAL_CHATTERS;
+      const filtered = preferMeme ? all.filter((x) => x.meme && state.memes[x.meme]) : all;
+      const src = filtered.length ? filtered : all;
+      const freshMeme = src.filter((x) => x.text !== state.lastChatterText && !state.recentMemeKeys.includes(x.meme));
+      const noRepeat = freshMeme.length ? freshMeme : (src.length > 1 ? src.filter((x) => x.text !== state.lastChatterText) : src);
+      const finalPool = noRepeat.length ? noRepeat : src;
+      const chosen = finalPool[Math.floor(Math.random() * finalPool.length)];
+      if (chosen && chosen.text) state.lastChatterText = chosen.text;
+      if (chosen && chosen.meme) {
+        state.recentMemeKeys.push(chosen.meme);
+        if (state.recentMemeKeys.length > 10) state.recentMemeKeys.shift();
+      }
+      return chosen;
+    }
+
+    function scheduleNextChatter() {
+      if (state.chatterSchedule) clearTimeout(state.chatterSchedule);
+      const delay = 26000 + Math.floor(Math.random() * 26000);
+      state.chatterSchedule = setTimeout(() => {
+        const hasTasks = state.telemetry.tasks && state.telemetry.tasks.length > 0;
+        if (state.prefs.chatterEnabled && !state.dragging && !state.throwing && !state.telemetry.running && !hasTasks && state.sleepPhase === 'awake') {
+          const item = pickTimeAwareChatter(Math.random() < 0.72);
+          showWhisper(item.text, item.meme, 5600);
+          // 对齐 dsh-pet：空闲碎碎念顺带播放碎碎念专属动画（不打断正在移动）
+          if (Math.random() < 0.45 && !ANIM_CFG.moves.some((m) => m.name === state.currentAnim)) {
+            const wAnim = pickFrom(ANIM_CFG.whisperAnims, state.lastWhisperAnim);
+            if (wAnim) {
+              state.lastWhisperAnim = wAnim;
+              switchAnim(wAnim, true);
+            }
+          }
+        }
+        scheduleNextChatter();
+      }, delay);
+    }
+
+    // ── 工作状态拟人化润色（dsh-pet 风格有温度的播报） ──
+    function humanizeWorkStatus(text, st) {
+      const s = String(text || '').trim();
+      if (!s) return s;
+      if (s === '读取文件') return '翻翻文件看看嘛~';
+      if (s === '编辑代码') return '噼里啪啦改代码中~';
+      if (s === '执行命令') return '跑一下命令咯♪';
+      if (s === '检索代码') return '翻找线索中~';
+      if (s === '网页操作') return '上网查查资料去~';
+      if (s === '子代理协作') return '摇伙伴一起干活啦✦';
+      if (s === '思考中' || s === '正在思考') return '正在认真想下一步呢~';
+      if (s === '任务完成' || (st === 'done' && s.length <= 6)) return '这一轮搞定啦，真棒✦';
+      if (st === 'waiting' && s.length <= 8) return `轮到${getUserTitle()}拍板啦，等你~`;
+      return s;
+    }
+
+    // ── 碎碎念气泡戳破动效 ──
+    function popWhisperBubble() {
+      if (!whisperWrap.classList.contains('is-on')) return;
+      playClickSound(0.32);
+      state.whisperForced = false;
+      if (state.whisperTimer) {
+        clearTimeout(state.whisperTimer);
+        state.whisperTimer = null;
+      }
+      whisperWrap.classList.add('is-popping');
+      setTimeout(() => {
+        whisperWrap.classList.remove('is-on', 'is-popping');
+        requestAnimationFrame(reportHitRects);
+      }, 175);
+    }
+
+    // ── 实时天气 SVG 图标与渲染（dsh-pet 同款环境气泡） ──
+    function renderWeatherSvg(icon) {
+      if (icon === 'sun') {
+        return '<svg viewBox="0 0 40 40" fill="none"><circle cx="20" cy="20" r="8" fill="#fbbf24" stroke="#f59e0b" stroke-width="2"/><g stroke="#f59e0b" stroke-width="2.2" stroke-linecap="round"><line x1="20" y1="4" x2="20" y2="8"/><line x1="20" y1="32" x2="20" y2="36"/><line x1="4" y1="20" x2="8" y2="20"/><line x1="32" y1="20" x2="36" y2="20"/><line x1="8.7" y1="8.7" x2="11.5" y2="11.5"/><line x1="28.5" y1="28.5" x2="31.3" y2="31.3"/><line x1="31.3" y1="8.7" x2="28.5" y2="11.5"/><line x1="11.5" y1="28.5" x2="8.7" y2="31.3"/></g></svg>';
+      }
+      if (icon === 'partly') {
+        return '<svg viewBox="0 0 40 40" fill="none"><circle cx="15" cy="15" r="6.5" fill="#fbbf24"/><path d="M14 29h14a6 6 0 0 0 1-11.9A7.5 7.5 0 0 0 14.6 18 5.5 5.5 0 0 0 14 29Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1.6"/></svg>';
+      }
+      if (icon === 'rain') {
+        return '<svg viewBox="0 0 40 40" fill="none"><path d="M11 23h17a5.5 5.5 0 0 0 .8-10.9A7.5 7.5 0 0 0 14 13a5 5 0 0 0-3 10Z" fill="#cbd5e1" stroke="#64748b" stroke-width="1.6"/><g stroke="#3b82f6" stroke-width="2.2" stroke-linecap="round"><line x1="14" y1="27" x2="12" y2="33"/><line x1="20" y1="27" x2="18" y2="33"/><line x1="26" y1="27" x2="24" y2="33"/></g></svg>';
+      }
+      if (icon === 'snow') {
+        return '<svg viewBox="0 0 40 40" fill="none"><path d="M11 23h17a5.5 5.5 0 0 0 .8-10.9A7.5 7.5 0 0 0 14 13a5 5 0 0 0-3 10Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1.6"/><g fill="#38bdf8"><circle cx="14" cy="29" r="2"/><circle cx="20" cy="31" r="2"/><circle cx="26" cy="29" r="2"/></g></svg>';
+      }
+      if (icon === 'storm') {
+        return '<svg viewBox="0 0 40 40" fill="none"><path d="M11 22h17a5.5 5.5 0 0 0 .8-10.9A7.5 7.5 0 0 0 14 12a5 5 0 0 0-3 10Z" fill="#94a3b8" stroke="#475569" stroke-width="1.6"/><polygon points="21,23 15,31 20,31 18,37 26,28 21,28" fill="#f59e0b"/></svg>';
+      }
+      return '<svg viewBox="0 0 40 40" fill="none"><path d="M10 26h19a6 6 0 0 0 1-11.9A8 8 0 0 0 14.5 15 5.5 5.5 0 0 0 10 26Z" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1.8"/></svg>';
+    }
+
+    function closeWeatherCard() {
+      state.weatherOpen = false;
+      if (state.weatherAutoCloseTimer) {
+        clearTimeout(state.weatherAutoCloseTimer);
+        state.weatherAutoCloseTimer = null;
+      }
+      weatherCard.classList.remove('is-on');
+      requestAnimationFrame(reportHitRects);
+    }
+
+    function describeWmoZh(code, tempC) {
+      if (code === 0) return { summary: '晴朗', icon: 'sun', tip: '阳光正好，适合开心写代码♪' };
+      if (code === 1 || code === 2) return { summary: '少云', icon: 'partly', tip: '微风和煦，今天状态稳稳的✦' };
+      if (code === 3) return { summary: '阴天', icon: 'cloud', tip: '天色有点阴，室内灯光调柔和些护眼哦~' };
+      if (code === 45 || code === 48) return { summary: '有雾', icon: 'fog', tip: '外面雾蒙蒙的，出门注意安全呀~' };
+      if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return { summary: code >= 65 ? '大雨' : '有雨', icon: 'rain', tip: '外面在下雨喵！出门千万别忘带伞☂' };
+      if ((code >= 71 && code <= 77) || code === 85 || code === 86) return { summary: '降雪', icon: 'snow', tip: '下雪啦❄️ 注意保暖多穿点衣服哦~' };
+      if (code >= 95) return { summary: '雷阵雨', icon: 'storm', tip: '打雷下雨啦⚡ 记得关窗安心待在室内~' };
+      const tip = tempC <= 8 ? '气温偏低，记得多加件外套保暖喵~' : tempC >= 32 ? '外面好热呀，多喝水吹空调防暑♪' : '天气平稳，专心肝代码喵~';
+      return { summary: '多云', icon: 'cloud', tip };
+    }
+
+    async function fetchWeatherDirectFallback(preferredCity) {
+      let city = (preferredCity || '').trim();
+      let lat = NaN, lon = NaN, approxByIp = false;
+      if (city) {
+        for (const q of [city, city.endsWith('市') ? city.slice(0, -1) : city + '市']) {
+          try {
+            const g = await fetch('https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&format=json&name=' + encodeURIComponent(q)).then((r) => r.json());
+            if (g && Array.isArray(g.results) && g.results[0]) {
+              lat = Number(g.results[0].latitude);
+              lon = Number(g.results[0].longitude);
+              city = g.results[0].name || city;
+              break;
+            }
+          } catch {}
+        }
+      }
+      if (!Number.isFinite(lat)) {
+        approxByIp = true;
+        try {
+          const ip = await fetch('https://ipwho.is/').then((r) => r.json());
+          if (ip && Number.isFinite(Number(ip.latitude))) {
+            lat = Number(ip.latitude);
+            lon = Number(ip.longitude);
+            city = ip.city || '当前位置';
+          }
+        } catch {}
+      }
+      if (!Number.isFinite(lat)) return { ok: false, error: '暂时未能定位城市，可在右键设置自定义城市名~' };
+      const fc = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&timezone=auto`).then((r) => r.json());
+      const c = fc && fc.current;
+      if (!c) return { ok: false, error: '气象接口暂时无响应，稍后再试试喵~' };
+      const tempC = Number(c.temperature_2m || 0);
+      const info = describeWmoZh(Number(c.weather_code || 0), tempC);
+      return {
+        ok: true,
+        city: city || '当前位置',
+        approxByIp,
+        temperatureC: Math.round(tempC * 10) / 10,
+        apparentC: Math.round(Number(c.apparent_temperature ?? tempC) * 10) / 10,
+        humidityPercent: Math.round(Number(c.relative_humidity_2m || 0)),
+        windKph: Math.round(Number(c.wind_speed_10m || 0) * 10) / 10,
+        summary: info.summary,
+        icon: info.icon,
+        tip: info.tip,
+      };
+    }
+
+    async function fetchAndShowWeather(showPopup = true, force = false) {
+      if (showPopup) {
+        closeTodoPanel();
+        state.weatherOpen = true;
+        weatherCard.classList.add('is-on');
+        weatherCityEl.textContent = '🌤️ 正在查询天气…';
+        weatherSummaryEl.textContent = '拉取中…';
+        requestAnimationFrame(reportHitRects);
+      }
+      try {
+        const qs = `?force=${force ? '1' : '0'}&city=${encodeURIComponent(state.prefs.weatherCity || '')}`;
+        let res = await fetch('/api/weather' + qs).then((r) => r.json()).catch(() => null);
+        if (!res || !res.ok) {
+          res = await fetchWeatherDirectFallback(state.prefs.weatherCity || '').catch(() => res);
+        }
+        state.weatherData = res;
+        if (!showPopup) return;
+        if (res && res.ok) {
+          const approx = res.approxByIp ? ' (IP估测)' : '';
+          weatherCityEl.textContent = `📍 ${res.city}${approx}`;
+          weatherSvgWrap.innerHTML = renderWeatherSvg(res.icon || 'cloud');
+          weatherTempEl.textContent = `${res.temperatureC}°C`;
+          weatherSummaryEl.textContent = res.summary || '多云';
+          weatherApparentEl.textContent = `${res.apparentC}°C`;
+          weatherHumidityEl.textContent = `${res.humidityPercent}%`;
+          weatherWindEl.textContent = `${res.windKph} km/h`;
+          weatherTipEl.textContent = res.tip || '今天也要元气满满喵~';
+        } else {
+          weatherCityEl.textContent = '📍 天气查询';
+          weatherSvgWrap.innerHTML = renderWeatherSvg('cloud');
+          weatherTempEl.textContent = '--';
+          weatherSummaryEl.textContent = '暂不可用';
+          weatherTipEl.textContent = (res && res.error) ? res.error : '暂时没查到天气，稍后再试~';
+        }
+        requestAnimationFrame(reportHitRects);
+        if (state.weatherAutoCloseTimer) clearTimeout(state.weatherAutoCloseTimer);
+        state.weatherAutoCloseTimer = setTimeout(() => closeWeatherCard(), 16000);
+      } catch {
+        if (showPopup) {
+          weatherTipEl.textContent = '网络开小差啦，稍后再试试喵~';
+          requestAnimationFrame(reportHitRects);
+        }
+      }
+    }
+
+    // ── 头顶轻量待办清单（dsh-pet 同款：添加/到期/勾选/二次确认删/定时提醒） ──
+    async function loadTodos() {
+      try {
+        const arr = await fetch('/api/todos').then((r) => r.json());
+        if (Array.isArray(arr)) state.todos = arr;
+      } catch {}
+    }
+
+    async function saveTodos() {
+      try {
+        await fetch('/api/todos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state.todos),
+        });
+      } catch {}
+    }
+
+    function formatTodoDue(dueAt) {
+      if (!dueAt) return '';
+      const diffMin = Math.round((dueAt - Date.now()) / 60000);
+      if (diffMin < 0) return `已逾期 ${Math.abs(diffMin)} 分钟`;
+      if (diffMin < 60) return `${Math.max(1, diffMin)} 分钟后`;
+      const d = new Date(dueAt);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+    }
+
+    function renderTodoList() {
+      todoListEl.innerHTML = '';
+      const sorted = [...state.todos].sort((a, b) => {
+        if (Boolean(a.done) !== Boolean(b.done)) return a.done ? 1 : -1;
+        const da = a.dueAt || Number.MAX_SAFE_INTEGER;
+        const db = b.dueAt || Number.MAX_SAFE_INTEGER;
+        if (da !== db) return da - db;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+      if (!sorted.length) {
+        const empty = document.createElement('div');
+        empty.className = 'todo-empty';
+        empty.textContent = '还没有待办哦，在上面记一条吧✦';
+        todoListEl.appendChild(empty);
+        requestAnimationFrame(reportHitRects);
+        return;
+      }
+      for (const item of sorted) {
+        const row = document.createElement('div');
+        row.className = 'todo-row' + (item.done ? ' is-done' : '');
+
+        const chk = document.createElement('button');
+        chk.type = 'button';
+        chk.className = 'todo-chk';
+        chk.textContent = item.done ? '✓' : '';
+        chk.setAttribute('data-todo-act', 'toggle');
+        chk.setAttribute('data-todo-id', item.id);
+        row.appendChild(chk);
+
+        const wrap = document.createElement('div');
+        wrap.className = 'todo-txt-wrap';
+        const txt = document.createElement('div');
+        txt.className = 'todo-txt';
+        txt.textContent = item.text;
+        wrap.appendChild(txt);
+        if (item.dueAt && !item.done) {
+          const dt = document.createElement('div');
+          dt.className = 'todo-due-tag' + (item.dueAt < Date.now() ? ' is-overdue' : '');
+          dt.textContent = '⏰ ' + formatTodoDue(item.dueAt);
+          wrap.appendChild(dt);
+        }
+        row.appendChild(wrap);
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        const isConfirm = state.todoConfirmDelId === item.id;
+        del.className = 'todo-del' + (isConfirm ? ' is-confirm' : '');
+        del.textContent = isConfirm ? '确认?' : '×';
+        del.setAttribute('data-todo-act', 'delete');
+        del.setAttribute('data-todo-id', item.id);
+        row.appendChild(del);
+
+        todoListEl.appendChild(row);
+      }
+      requestAnimationFrame(reportHitRects);
+    }
+
+    function resolveTodoDueTimestamp(preset) {
+      const now = Date.now();
+      if (preset === '15m') return now + 15 * 60000;
+      if (preset === '1h') return now + 60 * 60000;
+      if (preset === '18h') {
+        const d = new Date();
+        d.setHours(18, 0, 0, 0);
+        if (d.getTime() <= now + 60000) d.setDate(d.getDate() + 1);
+        return d.getTime();
+      }
+      return 0;
+    }
+
+    function addTodoFromInput() {
+      const txt = (todoInput.value || '').trim();
+      if (!txt) return;
+      state.todos.push({
+        id: 'td_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+        text: txt,
+        dueAt: resolveTodoDueTimestamp(state.todoDuePreset),
+        done: false,
+        createdAt: Date.now(),
+        reminded15: false,
+        remindedDue: false,
+      });
+      todoInput.value = '';
+      state.todoConfirmDelId = '';
+      playClickSound(0.4);
+      saveTodos();
+      renderTodoList();
+    }
+
+    function openTodoPanel() {
+      closeWeatherCard();
+      state.todoOpen = true;
+      state.todoConfirmDelId = '';
+      todoPanel.classList.add('is-on');
+      renderTodoList();
+      postHost({ type: 'focusInput', active: true });
+      setTimeout(() => { try { todoInput.focus(); } catch {} }, 40);
+      requestAnimationFrame(reportHitRects);
+    }
+
+    function closeTodoPanel() {
+      if (!state.todoOpen) return;
+      state.todoOpen = false;
+      state.todoConfirmDelId = '';
+      todoPanel.classList.remove('is-on');
+      try { todoInput.blur(); } catch {}
+      postHost({ type: 'focusInput', active: false });
+      requestAnimationFrame(reportHitRects);
+    }
+
+    // 每 25 秒检查一次待办到期提醒
+    setInterval(() => {
+      if (!state.todos.length || state.sleepPhase !== 'awake') return;
+      const now = Date.now();
+      let dirty = false;
+      for (const item of state.todos) {
+        if (item.done || !item.dueAt) continue;
+        const leftMin = (item.dueAt - now) / 60000;
+        if (leftMin <= 0 && !item.remindedDue) {
+          item.remindedDue = true;
+          item.reminded15 = true;
+          dirty = true;
+          playClickSound(0.55);
+          triggerSquash(0.66);
+          showWhisper(`⏰ 待办到点啦！\n「${item.text}」该去处理咯喵~`, 'big_coming', 10000, true);
+          break;
+        } else if (leftMin > 0 && leftMin <= 15 && !item.reminded15) {
+          item.reminded15 = true;
+          dirty = true;
+          playClickSound(0.42);
+          showWhisper(`⏰ 还有 ${Math.ceil(leftMin)} 分钟到期：\n「${item.text}」提前提醒{title}✦`, 'cute', 8000, true);
+          break;
+        }
+      }
+      if (dirty) {
+        saveTodos();
+        if (state.todoOpen) renderTodoList();
+      }
+    }, 25000);
+
+    // ── 空中抓取粒子爆发 + 积分弹窗（复刻 dsh-pet score-popup.ts） ──
+    function spawnAirCatchScore(physX, physY, score, speed, petSize, isNewRecord, bestScore) {
+      playClickSound(0.62);
+      triggerSquash(0.58);
+      const dpr = window.devicePixelRatio || 1;
+      const x = Math.max(40, Math.min(window.innerWidth - 40, physX / dpr));
+      const y = Math.max(60, Math.min(window.innerHeight - 40, physY / dpr));
+
+      const burst = document.createElement('div');
+      burst.className = 'pet-score-burst';
+      document.body.appendChild(burst);
+      const colors = ['#ffb300', '#ff8f00', '#ff7043', '#f4511e', '#ffc400', '#ffd54f', '#ec4899', '#a855f7'];
+      const parts = [];
+      for (let i = 0; i < 24; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const spd = 130 + Math.random() * 340;
+        const rad = 3 + Math.random() * 4.5;
+        const el = document.createElement('div');
+        el.className = 'pet-score-particle';
+        el.style.left = x + 'px';
+        el.style.top = y + 'px';
+        el.style.width = (rad * 2) + 'px';
+        el.style.height = (rad * 2) + 'px';
+        el.style.background = colors[i % colors.length];
+        burst.appendChild(el);
+        parts.push({ el, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd - 95, t0: performance.now(), life: 520 + Math.random() * 360 });
+      }
+      const stepBurst = () => {
+        const now = performance.now();
+        let alive = false;
+        for (const p of parts) {
+          const lr = (now - p.t0) / p.life;
+          if (lr >= 1) continue;
+          alive = true;
+          const ts = (now - p.t0) / 1000;
+          p.el.style.transform = `translate(${(p.vx * ts).toFixed(1)}px, ${(p.vy * ts + 360 * ts * ts).toFixed(1)}px)`;
+          p.el.style.opacity = String(Math.max(0, 1 - lr));
+        }
+        if (alive) requestAnimationFrame(stepBurst);
+        else burst.remove();
+      };
+      requestAnimationFrame(stepBurst);
+
+      if (state.scorePopupEl) { try { state.scorePopupEl.remove(); } catch {} }
+      if (state.scorePopupTimer) clearTimeout(state.scorePopupTimer);
+      const pop = document.createElement('div');
+      pop.className = 'pet-score-popup';
+      const recBadge = isNewRecord ? '<span class="pet-score-rec">👑 新纪录!</span>' : '';
+      pop.innerHTML = `<div class="pet-score-val">+${score}${recBadge}</div><div class="pet-score-sub">空抓 ${Math.round(speed)}px/s · 最高 ${bestScore}</div>`;
+      document.body.appendChild(pop);
+      const rr = pop.getBoundingClientRect();
+      pop.style.left = Math.max(8, Math.min(x - rr.width / 2, window.innerWidth - rr.width - 8)) + 'px';
+      pop.style.top = Math.max(8, y - rr.height - 16) + 'px';
+      state.scorePopupEl = pop;
+      requestAnimationFrame(reportHitRects);
+      state.scorePopupTimer = setTimeout(() => {
+        if (state.scorePopupEl) {
+          state.scorePopupEl.remove();
+          state.scorePopupEl = null;
+          requestAnimationFrame(reportHitRects);
+        }
+      }, 2400);
+    }
+
+    // ── 双击弹弓瞄准线与蓄力 HUD ──
+    function updateSlingshotHud(active, pullDx, pullDy, pct) {
+      state.slingshotActive = Boolean(active);
+      if (!active) {
+        slingshotHud.classList.remove('is-on');
+        state.squashX = 1;
+        state.squashY = 1;
+        applyBodyTransform();
+        return;
+      }
+      slingshotHud.classList.add('is-on');
+      const p = Math.max(0, Math.min(100, Number(pct) || 0));
+      const color = p >= 75 ? '#ef4444' : p >= 40 ? '#f59e0b' : '#a855f7';
+      slingshotBadge.textContent = `🏹 弹弓蓄力 ${Math.round(p)}%`;
+      slingshotBadge.style.borderColor = color;
+      slingshotBadge.style.color = p >= 75 ? '#fecaca' : '#fde68a';
+
+      const cx = 160, cy = 112;
+      const dist = Math.hypot(pullDx, pullDy) || 1;
+      const len = Math.min(110, 26 + p * 0.85);
+      const ux = -pullDx / dist;
+      const uy = -pullDy / dist;
+      const tx = cx + ux * len;
+      const ty = cy + uy * len;
+      const bx = cx - ux * Math.min(44, len * 0.45);
+      const by = cy - uy * Math.min(44, len * 0.45);
+      slingshotSvg.innerHTML =
+        `<line x1="${bx.toFixed(1)}" y1="${by.toFixed(1)}" x2="${cx}" y2="${cy}" stroke="${color}" stroke-width="3.5" stroke-linecap="round" opacity="0.72"/>` +
+        `<line x1="${cx}" y1="${cy}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="${color}" stroke-width="3" stroke-dasharray="6 5" stroke-linecap="round"/>` +
+        `<circle cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="5" fill="${color}"/>`;
+
+      // 蓄力压缩身体
+      const sq = 1 - (p / 100) * 0.24;
+      state.squashY = sq;
+      state.squashX = 1 / Math.sqrt(Math.max(0.6, sq));
+      applyBodyTransform();
+    }
+
+    // ── 悬停小名牌 Tooltip ──
+    function updateHoverTooltip(on, physX, physY) {
+      state.hovering = Boolean(on);
+      if (!on || state.dragging || state.throwing || state.slingshotActive || state.todoOpen) {
+        petTooltip.classList.remove('is-on');
+        requestAnimationFrame(reportHitRects);
+        return;
+      }
+      const dpr = window.devicePixelRatio || 1;
+      const cx = physX / dpr;
+      const cy = physY / dpr;
+      const petName = state.prefs.petName || '星璃喵';
+      const act = state.currentAnim ? ` · ${state.currentAnim}` : '';
+      petTooltip.innerHTML = `🐾 ${petName}${act}<span class="tip-sub">S睡 D待办 W天气</span>`;
+      petTooltip.classList.add('is-on');
+      const r = petTooltip.getBoundingClientRect();
+      const left = Math.max(6, Math.min(cx + 14, window.innerWidth - r.width - 6));
+      const top = Math.max(6, Math.min(cy - r.height - 10, window.innerHeight - r.height - 6));
+      petTooltip.style.left = left + 'px';
+      petTooltip.style.top = top + 'px';
+      requestAnimationFrame(reportHitRects);
+    }
+
+    // ── 精准命中区上报（紧贴宠物角色轮廓 + 全部可见气泡/面板/名牌，空白区域 100% 穿透） ──
+    function reportHitRects() {
+      // 投掷高速飞行期间跳过 Win32 Form.Region 重建，防止裁剪边与 DWM 合成帧错位产生残影
+      if (state.throwing) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rects = [];
+      const addElRect = (el, kind = 'bubble') => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          rects.push({
+            kind,
+            x: Math.round(r.left * dpr),
+            y: Math.round(r.top * dpr),
+            w: Math.round(r.width * dpr),
+            h: Math.round(r.height * dpr),
+          });
+        }
+      };
+
+      const pr = (petWrap || petBody).getBoundingClientRect();
+      if (pr.width > 0 && pr.height > 0) {
+        rects.push({
+          kind: 'pet',
+          x: Math.round((pr.left + pr.width * 0.32) * dpr),
+          y: Math.round((pr.top + pr.height * 0.16) * dpr),
+          w: Math.round(pr.width * 0.36 * dpr),
+          h: Math.round(pr.height * 0.78 * dpr),
+        });
+        rects.push({
+          kind: 'petVisual',
+          x: Math.round(pr.left * dpr),
+          y: Math.round(pr.top * dpr),
+          w: Math.round(pr.width * dpr),
+          h: Math.round(pr.height * dpr),
+        });
+      }
+      if (taskStack.classList.contains('is-on')) {
+        const cards = taskStack.querySelectorAll('.task-card, .task-overflow-badge, .task-badge-item, .task-mode-orb, .task-badge-tooltip.is-on');
+        for (const el of cards) addElRect(el, 'bubble');
+      }
+      if (whisperWrap.classList.contains('is-on')) addElRect(whisperWrap, 'bubble');
+      if (weatherCard.classList.contains('is-on')) addElRect(weatherCard, 'bubble');
+      if (todoPanel.classList.contains('is-on')) addElRect(todoPanel, 'bubble');
+      if (petTooltip.classList.contains('is-on')) addElRect(petTooltip, 'bubble');
+      if (state.scorePopupEl) addElRect(state.scorePopupEl, 'bubble');
+
+      const rectsSig = rects.map((r) => `${r.kind}:${r.x},${r.y},${r.w},${r.h}`).join('|');
+      if (rectsSig === state.lastHitRectsSig) return;
+      state.lastHitRectsSig = rectsSig;
+      postHost({ type: 'hitRects', rects });
+    }
+
+    whisperWrap.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      popWhisperBubble();
+    });
+    document.getElementById('weather-close-btn').addEventListener('click', (ev) => { ev.stopPropagation(); closeWeatherCard(); });
+    document.getElementById('weather-refresh-btn').addEventListener('click', (ev) => { ev.stopPropagation(); playClickSound(0.35); fetchAndShowWeather(true, true); });
+    document.getElementById('todo-close-btn').addEventListener('click', (ev) => { ev.stopPropagation(); closeTodoPanel(); });
+    todoAddBtn.addEventListener('click', (ev) => { ev.stopPropagation(); addTodoFromInput(); });
+    todoInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); addTodoFromInput(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); closeTodoPanel(); }
+    });
+    todoDueRow.addEventListener('click', (ev) => {
+      const chip = ev.target && ev.target.closest ? ev.target.closest('.todo-due-chip') : null;
+      if (!chip) return;
+      ev.stopPropagation();
+      state.todoDuePreset = chip.getAttribute('data-due') || 'none';
+      todoDueRow.querySelectorAll('.todo-due-chip').forEach((c) => c.classList.toggle('is-active', c === chip));
+    });
+    todoListEl.addEventListener('click', (ev) => {
+      const btn = ev.target && ev.target.closest ? ev.target.closest('[data-todo-act]') : null;
+      if (!btn) return;
+      ev.stopPropagation();
+      const act = btn.getAttribute('data-todo-act');
+      const id = btn.getAttribute('data-todo-id');
+      const idx = state.todos.findIndex((x) => x.id === id);
+      if (idx < 0) return;
+      if (act === 'toggle') {
+        state.todos[idx].done = !state.todos[idx].done;
+        state.todoConfirmDelId = '';
+        playClickSound(0.4);
+        saveTodos();
+        renderTodoList();
+      } else if (act === 'delete') {
+        if (state.todoConfirmDelId === id) {
+          state.todos.splice(idx, 1);
+          state.todoConfirmDelId = '';
+          playClickSound(0.32);
+          saveTodos();
+          renderTodoList();
+        } else {
+          state.todoConfirmDelId = id;
+          renderTodoList();
+        }
+      }
+    });
+
+    // ── 宿主调用入口（C# ExecuteScript） ──
+    window.__petApi = {
+      setSize(px) {
+        const s = Math.max(200, Math.min(480, Number(px) || 320));
+        state.petSize = s;
+        const scale = Math.max(0.84, Math.min(1.28, s / 320));
+        document.documentElement.style.setProperty('--pet-w', s + 'px');
+        document.documentElement.style.setProperty('--pet-h', Math.round(s * 9 / 16) + 'px');
+        document.documentElement.style.setProperty('--pet-scale', scale.toFixed(3));
+        triggerSquash(0.76);
+        requestAnimationFrame(reportHitRects);
+      },
+      setPrefs(p) {
+        if (!p || typeof p !== 'object') return;
+        const prevWorkAnim = state.prefs.workAnimEnabled;
+        Object.assign(state.prefs, p);
+        const rawFontKey = String(state.prefs.fontFamily || 'youyuan').toLowerCase();
+        const fontKey = rawFontKey === 'candy' ? 'youyuan' : rawFontKey;
+        document.documentElement.style.setProperty('--pet-font', FONT_STACKS[fontKey] || FONT_STACKS.youyuan);
+        if (state.prefs.fixed) cancelMove();
+        if (prevWorkAnim !== state.prefs.workAnimEnabled && !state.dragging) {
+          advanceChain();
+        }
+        syncBubbles();
+      },
+      setDragging(isDrag) {
+        const next = Boolean(isDrag);
+        if (state.dragging === next) return;
+        state.dragging = next;
+        if (next) {
+          updateHoverTooltip(false, 0, 0);
+          cancelMove();
+          // 对齐 dsh-pet 细节：睡着时轻轻挪动位置不惊醒她，维持可爱睡姿！
+          if (state.sleepPhase === 'sleeping' || state.sleepPhase === 'starting') return;
+          const dragAnim = pickFrom(ANIM_CFG.drag);
+          if (dragAnim) switchAnim(dragAnim, false);
+        } else {
+          if (state.sleepPhase === 'sleeping' || state.sleepPhase === 'starting') return;
+          triggerSquash(0.68);
+          const work = resolveWorkAnim();
+          if (work) switchAnim(work.name, work.once, () => advanceChain());
+          else switchAnim(pickFrom(ANIM_CFG.idle), true);
+        }
+      },
+      setSlingshot(active, pullDx, pullDy, pct) {
+        if (active) updateHoverTooltip(false, 0, 0);
+        updateSlingshotHud(active, pullDx, pullDy, pct);
+      },
+      setHover(on, physX, physY) {
+        updateHoverTooltip(on, physX, physY);
+      },
+      onAirCatchScore(physX, physY, score, speed, petSize, isNewRecord, bestScore) {
+        updateHoverTooltip(false, 0, 0);
+        spawnAirCatchScore(physX, physY, score, speed, petSize, isNewRecord, bestScore);
+      },
+      showWeather(force = true) {
+        playClickSound(0.36);
+        fetchAndShowWeather(true, Boolean(force));
+      },
+      toggleTodoPanel() {
+        playClickSound(0.36);
+        if (state.todoOpen) closeTodoPanel();
+        else openTodoPanel();
+      },
+      setThrowing(isThrow) {
+        const next = Boolean(isThrow);
+        state.throwing = next;
+        if (next) {
+          state.dragging = false;
+          updateHoverTooltip(false, 0, 0);
+          playClickSound(0.5);
+          document.body.classList.add('is-throwing');
+        } else {
+          document.body.classList.remove('is-throwing');
+          if (!state.dragging) {
+            advanceChain();
+          }
+          requestAnimationFrame(reportHitRects);
+        }
+      },
+      // facingRight: false = 原样朝左 (left), true = 水平镜像朝右 (right)
+      setFacing(facingRight) {
+        state.facingRight = Boolean(facingRight);
+        applyBodyTransform();
+      },
+      squash(amount = 0.66) {
+        if (amount <= 0.72) playClickSound(0.32);
+        triggerSquash(amount);
+      },
+      toggleSleep() {
+        playClickSound(0.36);
+        if (state.sleepPhase === 'awake' || state.sleepPhase === 'waking') {
+          enterSleepMode();
+        } else {
+          wakeFromSleepMode(false);
+        }
+      },
+      playBalance(usedPct, quotaSummary) {
+        playClickSound(0.38);
+        if (state.sleepPhase !== 'awake') {
+          const refuse = SLEEP_REFUSE_TEXTS[Math.floor(Math.random() * SLEEP_REFUSE_TEXTS.length)];
+          showWhisper(refuse, 'sleep', 3800, true);
+          return;
+        }
+        cancelMove();
+        const p = Number.isFinite(Number(usedPct)) && Number(usedPct) >= 0 ? Math.max(0, Math.min(100, Math.round(Number(usedPct)))) : 25;
+        const rem = Math.max(0, 100 - p);
+        const idx = p >= 100 ? 5 : Math.floor(p / 20);
+        const anim = ANIM_CFG.balanceAnims[idx] || ANIM_CFG.balanceAnims[0];
+        const info = BALANCE_TIER_TEXTS[idx] || BALANCE_TIER_TEXTS[0];
+        const summaryLine = (typeof quotaSummary === 'string' && quotaSummary.trim())
+          ? quotaSummary.trim()
+          : `【当前额度】\n已用 ${p}% · 剩余 ${rem}%`;
+        const formattedHead = summaryLine.startsWith('【') ? summaryLine : `【${summaryLine}】`;
+        triggerSquash(0.74);
+        showWhisper(`${formattedHead}\n${info.text}`, info.meme, 6800, true);
+        if (hasAnim(anim)) {
+          state.lastPicked = anim;
+          switchAnim(anim, true, () => advanceChain());
+        }
+      },
+      onPoke(isTickle) {
+        if (state.dragging) return;
+        playClickSound(0.48);
+        if (state.sleepPhase === 'sleeping' || state.sleepPhase === 'starting') {
+          triggerSquash(0.84);
+          const refuse = SLEEP_REFUSE_TEXTS[Math.floor(Math.random() * SLEEP_REFUSE_TEXTS.length)];
+          showWhisper(refuse, 'sleep', 3600, true);
+          return;
+        }
+        cancelMove();
+        triggerSquash(0.64);
+        if (isTickle && hasAnim('点击回应-挠痒咯咯笑')) {
+          switchAnim('点击回应-挠痒咯咯笑', true);
+          showWhisper('呀~ 好痒好痒别一直戳人家啦！(⁄ ⁄•⁄ω⁄•⁄ ⁄)', 'cute', 4200, true);
+          return;
+        }
+        const anim = pickFrom(ANIM_CFG.clicks, state.lastClickAnim);
+        if (anim) {
+          state.lastClickAnim = anim;
+          switchAnim(anim, true);
+        }
+        if (state.prefs.chatterEnabled && Math.random() < 0.45) {
+          const item = pickTimeAwareChatter(Math.random() < 0.65);
+          showWhisper(item.text, item.meme, 4800);
+        }
+      },
+      // 选中某个动作仅生效一次，播完后自动切回随机动作链
+      playAction(name) {
+        cancelMove();
+        if (!name) {
+          if (state.sleepPhase !== 'awake') wakeFromSleepMode(false);
+          else advanceChain();
+          return;
+        }
+        if (name === ANIM_CFG.sleep.start || name === ANIM_CFG.sleep.loop) {
+          enterSleepMode();
+          return;
+        }
+        if (name === ANIM_CFG.sleep.end) {
+          if (state.sleepPhase !== 'awake') wakeFromSleepMode(false);
+          else if (hasAnim(name)) switchAnim(name, true, () => advanceChain());
+          return;
+        }
+        if (state.sleepPhase !== 'awake') wakeFromSleepMode(true);
+        const mv = ANIM_CFG.moves.find((m) => m.name === name);
+        if (mv) {
+          startMoveAction(mv);
+          return;
+        }
+        if (name === '东张西望') {
+          switchAnim(name, true, () => {
+            state.facingRight = !state.facingRight;
+            applyBodyTransform();
+            advanceChain();
+          });
+          return;
+        }
+        if (hasAnim(name)) {
+          if (ANIM_CFG.noMirrorAnims.has(name) && state.facingRight) {
+            state.facingRight = false;
+            applyBodyTransform();
+          }
+          triggerSquash(0.76);
+          state.lastPicked = name;
+          switchAnim(name, true, () => advanceChain());
+        }
+      },
+      showNotice(text, memeKey) {
+        if (!text) return;
+        triggerSquash(0.76);
+        showWhisper(String(text), memeKey || 'ciallo', 5600, true);
+      },
+      triggerChatter() {
+        playClickSound(0.38);
+        if (state.sleepPhase === 'sleeping' || state.sleepPhase === 'starting') {
+          const refuse = SLEEP_REFUSE_TEXTS[Math.floor(Math.random() * SLEEP_REFUSE_TEXTS.length)];
+          showWhisper(refuse, 'sleep', 3800, true);
+          return;
+        }
+        const item = pickTimeAwareChatter(true);
+        showWhisper(item.text, item.meme, 5600, true);
+        triggerSquash(0.76);
+        if (!state.dragging && !state.telemetry.running) {
+          const wAnim = pickFrom(ANIM_CFG.whisperAnims, state.lastWhisperAnim);
+          if (wAnim) {
+            cancelMove();
+            state.lastWhisperAnim = wAnim;
+            switchAnim(wAnim, true, () => advanceChain());
+          }
+        }
+      },
+      clearBubbleHover() {
+        const had = Boolean(state.hoveredBadgeId) || Boolean(badgeTooltipEl && badgeTooltipEl.classList.contains('is-on'));
+        state.hoveredBadgeId = '';
+        if (badgeTooltipEl) {
+          badgeTooltipEl.classList.remove('is-on');
+        }
+        if (had) requestAnimationFrame(reportHitRects);
+      },
+      handleBubbleClick(physX, physY) {
+        if (state.lastHandledClickMs && Date.now() - state.lastHandledClickMs < 180) return;
+        state.lastHandledClickMs = Date.now();
+        const dpr = window.devicePixelRatio || 1;
+        const cx = physX / dpr;
+        const cy = physY / dpr;
+        const el = document.elementFromPoint(cx, cy);
+        if (!el) return;
+        if (el.closest && el.closest('#todo-panel')) {
+          if (el.closest('#todo-input')) {
+            postHost({ type: 'focusInput', active: true });
+            try { todoInput.focus(); } catch {}
+          }
+          return;
+        }
+        if (el.closest && el.closest('#weather-card')) {
+          if (el.closest('#weather-close-btn')) closeWeatherCard();
+          else if (el.closest('#weather-refresh-btn')) fetchAndShowWeather(true, true);
+          return;
+        }
+        if (el.closest && el.closest('#whisper-wrap')) {
+          popWhisperBubble();
+          return;
+        }
+        if (el.closest && el.closest('[data-bubble-act="toggle-compact"]')) {
+          toggleCompactTaskMode();
+          return;
+        }
+        const badgeEl = el.closest ? el.closest('.task-badge-item') : null;
+        if (badgeEl) {
+          const bId = badgeEl.getAttribute('data-task-id') || '';
+          const bRec = taskBadgeMap.get(bId);
+          if (bRec && bRec.item) {
+            activateAndMaybeDismissTask(bRec.item);
+          }
+          return;
+        }
+        const cardEl = el.closest ? el.closest('.task-card') : null;
+        if (!cardEl) return;
+        const taskId = cardEl.getAttribute('data-task-id') || '';
+        const rec = taskCardMap.get(taskId);
+        const cur = rec ? rec.item : null;
+        if (!cur) return;
+        if (el.closest('[data-bubble-act="dismiss"]')) {
+          dismissTaskImmediately(cur);
+          return;
+        }
+        if (el.closest('[data-bubble-act="toggle"]')) {
+          if (state.expandedTaskIds.has(cur.id)) state.expandedTaskIds.delete(cur.id);
+          else state.expandedTaskIds.add(cur.id);
+          syncBubbles(true);
+          return;
+        }
+        activateAndMaybeDismissTask(cur);
+      },
+      applyTelemetry(t) {
+        if (!t || typeof t !== 'object') return;
+        const prevState = state.telemetry.workState;
+        const prevDone = state.telemetry.doneState;
+        const tasks = Array.isArray(t.tasks) ? t.tasks : [];
+        state.telemetry = {
+          running: Boolean(t.running),
+          workState: String(t.workState || (t.running ? 'working' : t.doneState || 'idle')),
+          doneState: String(t.doneState || ''),
+          tasks,
+        };
+        syncBubbles();
+
+        if (state.prefs.workAnimEnabled && !state.dragging && !state.throwing && state.sleepPhase === 'awake') {
+          const ws = state.telemetry.workState;
+          if (state.telemetry.running) {
+            if ((ws === 'thinking' || ws === 'working' || ws === 'waiting') && prevState !== ws) {
+              cancelMove();
+              const work = resolveWorkAnim();
+              if (work) switchAnim(work.name, work.once, () => advanceChain());
+            }
+          } else if (state.telemetry.doneState === 'done' && prevDone !== 'done') {
+            cancelMove();
+            triggerSquash(0.62);
+            const doneAnim = pickFrom(ANIM_CFG.workStatus.done) || '点击回应-开心跃动';
+            switchAnim(doneAnim, true, () => advanceChain());
+          } else if (state.telemetry.doneState === 'error' && prevDone !== 'error') {
+            cancelMove();
+            triggerSquash(0.66);
+            const errAnim = pickFrom(ANIM_CFG.workStatus.error) || '被吓一跳';
+            switchAnim(errAnim, true, () => advanceChain());
+          } else if ((prevState === 'thinking' || prevState === 'working' || prevState === 'waiting') && !state.telemetry.running && !state.telemetry.doneState) {
+            advanceChain();
+          }
+        }
+      },
+      reportHitRects,
+    };
+
+    async function boot() {
+      try {
+        const [animsRes, memesRes] = await Promise.all([
+          fetch('/api/anims').then((r) => r.json()).catch(() => []),
+          fetch('/api/memes').then((r) => r.json()).catch(() => ({})),
+          loadTodos(),
+        ]);
+        const list = Array.isArray(animsRes) ? animsRes : [];
+        const known = new Set([
+          ...ANIM_CFG.idle,
+          ...ANIM_CFG.turn,
+          ...ANIM_CFG.drag,
+          ...ANIM_CFG.clicks,
+          ...ANIM_CFG.moves.map((m) => m.name),
+          ...ANIM_CFG.categories.flatMap((c) => c.actions),
+          ...Object.values(ANIM_CFG.workStatus).flat(),
+          ...ANIM_CFG.whisperAnims,
+          ...ANIM_CFG.balanceAnims,
+          ANIM_CFG.sleep.start,
+          ANIM_CFG.sleep.loop,
+          ANIM_CFG.sleep.end,
+        ]);
+        for (const name of list) {
+          state.available.add(name);
+          if (!known.has(name)) state.customExtras.push(name);
+        }
+        state.memes = memesRes && typeof memesRes === 'object' ? memesRes : {};
+      } catch {}
+
+      document.documentElement.style.setProperty('--pet-w', state.petSize + 'px');
+      document.documentElement.style.setProperty('--pet-h', Math.round(state.petSize * 9 / 16) + 'px');
+
+      await switchAnim(pickFrom(ANIM_CFG.idle), true);
+      if (hasAnim('被鼠标拖拽悬空反馈')) {
+        getBlobUrl('被鼠标拖拽悬空反馈').catch(() => {});
+      }
+      scheduleNextChatter();
+      // 后台静默预热一次天气，供雨天/降温贴心提醒
+      setTimeout(() => fetchAndShowWeather(false, false), 6000);
+      reportHitRects();
+      const activeVid = state.frontIdx === 0 ? vidA : vidB;
+      postHost({
+        type: 'ready',
+        anims: Array.from(state.available),
+        videoW: activeVid ? activeVid.videoWidth : 0,
+        videoH: activeVid ? activeVid.videoHeight : 0,
+        readyState: activeVid ? activeVid.readyState : 0,
+      });
+    }
+
+    window.addEventListener('resize', () => { state.lastHitRectsSig = ''; requestAnimationFrame(reportHitRects); });
+    if (typeof ResizeObserver === 'function') {
+      const bubbleAnchor = document.getElementById('bubble-anchor');
+      if (bubbleAnchor) {
+        new ResizeObserver(() => requestAnimationFrame(reportHitRects)).observe(bubbleAnchor);
+      }
+    }
+    boot();
+  })();
+  </script>
+</body>
+</html>

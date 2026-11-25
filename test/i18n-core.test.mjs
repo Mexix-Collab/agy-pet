@@ -542,3 +542,78 @@ test('Swarm sidecar translator translates chrome, <select><option>, dynamic rule
     globalThis.MutationObserver = prevMO;
   }
 });
+
+test('createDomTranslator merges i18n-extra dict and rules dynamically, ignores invalid regex, and restores on clear', () => {
+  const { doc, body, makeEl, NodeFilter, MutationObserver } = createMiniDom();
+  const prevNF = globalThis.NodeFilter;
+  const prevMO = globalThis.MutationObserver;
+  globalThis.NodeFilter = NodeFilter;
+  globalThis.MutationObserver = MutationObserver;
+
+  try {
+    const newBtn = makeEl('button', { text: 'Brand New Button' });
+    const ruleBtn = makeEl('button', { text: 'Retry 3 times' });
+    body.append(newBtn, ruleBtn);
+
+    const translator = i18nCore.createDomTranslator(i18nLocales.resolveLocaleBundle);
+    translator.setLanguage('zh-CN', doc);
+    assert.equal(newBtn.textContent, 'Brand New Button');
+    assert.ok(translator.missing(doc).includes('Brand New Button'));
+
+    // Structured entry with invalid regex safely skipped + valid dict & rule applied
+    const changed = translator.setExtraLocales(
+      {
+        'zh-CN': {
+          dict: { 'Brand New Button': '全新按钮' },
+          rules: [
+            ['[unclosed', '', 'broken'],
+            ['^Retry (\\d+) times$', 'i', '重试 $1 次'],
+          ],
+        },
+        ja: {
+          'Brand New Button': '新しいボタン',
+        },
+      },
+      doc
+    );
+    assert.equal(changed, true);
+    assert.equal(newBtn.textContent, '全新按钮');
+    assert.equal(ruleBtn.textContent, '重试 3 次');
+    assert.equal(translator.missing(doc).includes('Brand New Button'), false);
+
+    // Same payload is a no-op
+    assert.equal(
+      translator.setExtraLocales(
+        {
+          'zh-CN': {
+            dict: { 'Brand New Button': '全新按钮' },
+            rules: [
+              ['[unclosed', '', 'broken'],
+              ['^Retry (\\d+) times$', 'i', '重试 $1 次'],
+            ],
+          },
+          ja: {
+            'Brand New Button': '新しいボタン',
+          },
+        },
+        doc
+      ),
+      false
+    );
+
+    // Flat map language entry works too
+    translator.setLanguage('ja', doc);
+    assert.equal(newBtn.textContent, '新しいボタン');
+
+    // Clearing extra locales reverts custom terms cleanly
+    translator.setLanguage('zh-CN', doc);
+    translator.setExtraLocales(null, doc);
+    assert.equal(newBtn.textContent, 'Brand New Button');
+    assert.equal(ruleBtn.textContent, 'Retry 3 times');
+
+    translator.destroy();
+  } finally {
+    globalThis.NodeFilter = prevNF;
+    globalThis.MutationObserver = prevMO;
+  }
+});
