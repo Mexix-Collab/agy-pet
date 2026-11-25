@@ -856,3 +856,12 @@ test('core-only lightweight updater build and online updater contract', () => {
   assert.match(nekoSrc, /SHA256SUMS\.txt/);
   assert.match(nekoSrc, /CompareSemVer/);
 });
+
+test('background transcript tracker resolves multi-hop nested subagents onto root conversation', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const nekoSrc = fs.readFileSync(path.join(repoRoot, 'installer', 'watcher', 'DesktopNeko.cs'), 'utf8');
+  assert.match(nekoSrc, /Dictionary<string, string>\s+resolvedRoot\s*=\s*new\s+Dictionary<string, string>/);
+  assert.match(nekoSrc, /childToParent\s*=\s*resolvedRoot;/);
+  assert.match(nekoSrc, /extraSwarmRoots/);
+  assert.match(nekoSrc, /extraMultiRoots/);
+});

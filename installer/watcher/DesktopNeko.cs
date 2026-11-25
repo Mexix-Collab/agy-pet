@@ -3955,6 +3955,54 @@ namespace AgyClaudeStyle.Watcher
                     }
                 }
 
+                // Compress multi-hop descendant chains (e.g. grandchild subagent -> child subagent -> root conversation)
+                // directly onto the top-level root conversation so nested subagent/swarm progress is never dropped.
+                if (childToParent.Count > 0)
+                {
+                    Dictionary<string, string> resolvedRoot = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (KeyValuePair<string, string> kv in childToParent)
+                    {
+                        string cur = kv.Value;
+                        HashSet<string> visited = new HashSet<string>(StringComparer.Ordinal);
+                        visited.Add(kv.Key);
+                        while (!string.IsNullOrEmpty(cur) && !visited.Contains(cur))
+                        {
+                            visited.Add(cur);
+                            string nextParent;
+                            if (childToParent.TryGetValue(cur, out nextParent) && !string.IsNullOrEmpty(nextParent))
+                            {
+                                cur = nextParent;
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(cur) && !string.Equals(cur, kv.Key, StringComparison.Ordinal))
+                        {
+                            resolvedRoot[kv.Key] = cur;
+                        }
+                    }
+                    childToParent = resolvedRoot;
+
+                    // Propagate swarm/multi parent flags upward to the resolved top-level root
+                    List<string> extraSwarmRoots = new List<string>();
+                    foreach (string sp in swarmParents)
+                    {
+                        string r;
+                        if (childToParent.TryGetValue(sp, out r) && !string.IsNullOrEmpty(r)) extraSwarmRoots.Add(r);
+                    }
+                    for (int ei = 0; ei < extraSwarmRoots.Count; ei++) swarmParents.Add(extraSwarmRoots[ei]);
+
+                    List<string> extraMultiRoots = new List<string>();
+                    foreach (string mp in multiParents)
+                    {
+                        string r;
+                        if (childToParent.TryGetValue(mp, out r) && !string.IsNullOrEmpty(r)) extraMultiRoots.Add(r);
+                    }
+                    for (int ei = 0; ei < extraMultiRoots.Count; ei++) multiParents.Add(extraMultiRoots[ei]);
+                }
+
                 // Phase 2: Parse recent active transcripts
                 Dictionary<string, NekoTaskItem> parsedItemsByCid = new Dictionary<string, NekoTaskItem>(StringComparer.Ordinal);
                 for (int d = 0; d < dirs.Length; d++)
@@ -4454,8 +4502,8 @@ namespace AgyClaudeStyle.Watcher
                     meta.RunningCount = runCnt;
                     parentMetaMap[pCid] = meta;
 
-                    // If parent coordinator is currently quiet while workers are still active, keep parent card alive
-                    if (!parsedItemsByCid.ContainsKey(pCid) && runCnt > 0)
+                    // If parent coordinator is currently quiet while workers/nested subagents are active (or just finished), keep root card alive
+                    if (!parsedItemsByCid.ContainsKey(pCid) && clist.Count > 0 && (runCnt > 0 || clist[0].DoneState == "done" || clist[0].DoneState == "error"))
                     {
                         string pKnownTitle = "";
                         lock (_syncLock) { _knownTaskTitles.TryGetValue(pCid, out pKnownTitle); }
@@ -4466,13 +4514,30 @@ namespace AgyClaudeStyle.Watcher
                         synth.Id = pCid;
                         synth.TaskTitle = pTitle;
                         synth.ShortTitle = pTitle.Length > 14 ? pTitle.Substring(0, 13) + "…" : pTitle;
-                        synth.Running = true;
-                        synth.WorkState = "working";
                         synth.Steps = clist[0].Steps;
                         synth.ElapsedSec = clist[0].ElapsedSec;
-                        synth.StatusText = isSwarm
-                            ? string.Format("🐝 蜂群并行协作 ({0}/{1}运行)", runCnt, meta.TotalCount)
-                            : string.Format("🤖 多代理协作 ({0}运行)", runCnt);
+                        if (runCnt > 0)
+                        {
+                            synth.Running = true;
+                            synth.WorkState = "working";
+                            synth.StatusText = isSwarm
+                                ? string.Format("🐝 蜂群并行协作 ({0}/{1}运行)", runCnt, meta.TotalCount)
+                                : string.Format("🤖 多代理协作 ({0}运行)", runCnt);
+                        }
+                        else if (clist[0].DoneState == "error")
+                        {
+                            synth.Running = false;
+                            synth.WorkState = "error";
+                            synth.DoneState = "error";
+                            synth.StatusText = "! 子代理遇到异常";
+                        }
+                        else
+                        {
+                            synth.Running = false;
+                            synth.WorkState = "done";
+                            synth.DoneState = "done";
+                            synth.StatusText = string.Format("✓ 子代理任务已完成 ({0}s)", synth.ElapsedSec);
+                        }
                         parsedItemsByCid[pCid] = synth;
                     }
                 }
