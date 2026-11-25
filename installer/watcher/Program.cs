@@ -497,7 +497,99 @@ namespace AgyClaudeStyle.Watcher
                 string pendingActivateTitle = "";
                 string pendingActivateWinTitle = "";
                 DateTime pendingActivateUntilUtc = DateTime.MinValue;
+                DateTime lastBlankRecoverUtc = DateTime.MinValue;
                 ManualResetEventSlim wakePollEvent = new ManualResetEventSlim(false);
+
+                Func<CdpSession, Task<string>> probeWindowStateAsync = async (sess) =>
+                {
+                    if (sess == null || sess.IsClosed) return "closed";
+                    const string probeJs = "(() => { try { "
+                        + "const ready = !!document.querySelector('[data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"conversation-row-sidebar\"], [data-testid=\"home-greeting\"], [data-testid=\"new-conversation-button\"], .agy-home'); "
+                        + "if (ready) return 'ready'; "
+                        + "const txt = (document.body && document.body.innerText || '').trim(); "
+                        + "const inter = document.querySelectorAll('button, input, textarea, a[href], [role=\"dialog\"]').length; "
+                        + "return (document.readyState === 'complete' && txt.length === 0 && inter === 0) ? 'blank-spinner' : 'loading'; "
+                        + "} catch (e) { return 'err'; } })()";
+                    try
+                    {
+                        object v = await sess.EvaluateAsync(probeJs, false).ConfigureAwait(false);
+                        return Convert.ToString(v) ?? "err";
+                    }
+                    catch
+                    {
+                        return "err";
+                    }
+                };
+
+                Func<AttachedEntry, Task> watchFreshWindowStallAsync = async (ae) =>
+                {
+                    if (ae == null || ae.Session == null || !ae.IsMainPage || IsTempTestDir(_baseDir)) return;
+                    string u = ae.Url ?? "";
+                    bool isLocalHub = u.StartsWith("http://127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                        || u.StartsWith("https://127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                        || u.StartsWith("http://localhost", StringComparison.OrdinalIgnoreCase)
+                        || u.StartsWith("https://localhost", StringComparison.OrdinalIgnoreCase);
+                    if (!isLocalHub) return;
+
+                    CdpSession sess = ae.Session;
+                    await Task.Delay(4500).ConfigureAwait(false);
+                    if (sess.IsClosed) return;
+                    string st1 = await probeWindowStateAsync(sess).ConfigureAwait(false);
+                    if (st1 != "blank-spinner") return;
+
+                    await Task.Delay(1500).ConfigureAwait(false);
+                    if (sess.IsClosed) return;
+                    string st2 = await probeWindowStateAsync(sess).ConfigureAwait(false);
+                    if (st2 != "blank-spinner") return;
+
+                    bool allowRecover = false;
+                    lock (activateLock)
+                    {
+                        if ((DateTime.UtcNow - lastBlankRecoverUtc).TotalSeconds >= 25.0)
+                        {
+                            lastBlankRecoverUtc = DateTime.UtcNow;
+                            allowRecover = true;
+                        }
+                    }
+                    if (!allowRecover) return;
+
+                    Log("[🩹] 检测到 Antigravity 首屏白屏转圈卡壳 (>6s)，尝试自动刷新恢复...");
+                    try
+                    {
+                        Dictionary<string, object> reloadParams = new Dictionary<string, object>(StringComparer.Ordinal);
+                        reloadParams["ignoreCache"] = false;
+                        await sess.SendAsync("Page.reload", reloadParams, 5000).ConfigureAwait(false);
+                    }
+                    catch { }
+
+                    for (int ri = 0; ri < 8; ri++)
+                    {
+                        await Task.Delay(500).ConfigureAwait(false);
+                        if (sess.IsClosed) return;
+                        string stAfter = await probeWindowStateAsync(sess).ConfigureAwait(false);
+                        if (stAfter == "ready")
+                        {
+                            Log("[🩹] 自动刷新恢复成功，主界面已就绪");
+                            return;
+                        }
+                    }
+
+                    if (sess.IsClosed) return;
+                    string stFinal = await probeWindowStateAsync(sess).ConfigureAwait(false);
+                    if (stFinal != "blank-spinner") return;
+
+                    Log("[🩹] 刷新未解除白屏卡壳，自动关闭卡死空白窗并纯净重唤 Antigravity...");
+                    lock (activateLock)
+                    {
+                        if (!string.IsNullOrEmpty(pendingActivateCid) || !string.IsNullOrEmpty(pendingActivateTitle))
+                        {
+                            pendingActivateUntilUtc = DateTime.UtcNow.AddSeconds(20);
+                        }
+                    }
+                    try { await sess.SendAsync("Page.close", null, 3000).ConfigureAwait(false); } catch { }
+                    await Task.Delay(450).ConfigureAwait(false);
+                    try { CdpHelper.WakeExistingAntigravityWindow(null); } catch { }
+                };
 
                 Func<AttachedEntry, string, string, string, bool, Task> activateEntryAsync = async (ae, actCid, actTitle, actWinTitle, isFreshWindow) =>
                 {
@@ -811,6 +903,22 @@ namespace AgyClaudeStyle.Watcher
                         nekoBindParams["name"] = "__agCsNekoBinding";
                         await session.SendAsync("Runtime.addBinding", nekoBindParams, 5000).ConfigureAwait(false);
 
+                        if (entry.IsMainPage && !string.IsNullOrEmpty(entry.Url) && entry.Url.IndexOf("#t=", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            for (int bi = 0; bi < 10; bi++)
+                            {
+                                await Task.Delay(150).ConfigureAwait(false);
+                                if (session.IsClosed) break;
+                                try
+                                {
+                                    object hObj = await session.EvaluateAsync("String(location.hash || '')", false).ConfigureAwait(false);
+                                    string hStr = Convert.ToString(hObj) ?? "";
+                                    if (hStr.IndexOf("t=", StringComparison.OrdinalIgnoreCase) < 0) break;
+                                }
+                                catch { break; }
+                            }
+                        }
+
                         string exprSnapshot;
                         string cfgExprSnapshot;
                         lock (exprLock)
@@ -822,6 +930,10 @@ namespace AgyClaudeStyle.Watcher
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         lock (exprLock) { hadAttachedWindow = true; }
                         Log(string.Format("[✓] 已注入 agy-pet: {0} ({1})", entry.Title, status));
+                        if (entry.IsMainPage)
+                        {
+                            Task ignoredStallWatch = Task.Run(() => watchFreshWindowStallAsync(entry));
+                        }
 
                         string actCid = "";
                         string actTitle = "";

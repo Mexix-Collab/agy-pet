@@ -830,3 +830,13 @@ test('desktop pet uses double-click for quota display and triple-click to return
   assert.match(src, /if\s*\(\s*_tapCount\s*==\s*2\s*\)/, 'double tap arms debounce timer');
   assert.match(src, /_tapCount\s*=\s*0;\s*_lastTapUpMs\s*=\s*0;\s*ReturnToCorner\s*\(\s*\);/, 'triple tap immediately returns to bottom-right corner');
 });
+
+test('watcher guards AuthBootstrap #t= and auto-recovers Antigravity blank-spinner stall', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const src = fs.readFileSync(path.join(repoRoot, 'installer', 'watcher', 'Program.cs'), 'utf8');
+  assert.match(src, /watchFreshWindowStallAsync/, 'blank-spinner watchdog exists');
+  assert.match(src, /blank-spinner/, 'detects zero-text zero-control blank-spinner state');
+  assert.match(src, /Page\.reload/, 'attempts gentle reload first');
+  assert.match(src, /Page\.close/, 'closes dead blank window as fallback');
+  assert.match(src, /WakeExistingAntigravityWindow/, 're-wakes single-instance Antigravity cleanly');
+});
