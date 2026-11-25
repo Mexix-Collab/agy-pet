@@ -783,7 +783,7 @@ enum CdpHelper {
                 return epDir == normDir ? .owned : .foreign
             }
             if exePrefix.hasPrefix("/") {
-                return normalizePath(exePrefix) == expectedNativeExe ? .owned : .foreign
+                return expectedNativeExes.contains(normalizePath(exePrefix)) ? .owned : .foreign
             }
             return .unknown
         }
