@@ -2925,12 +2925,6 @@
       },
       playBalance(usedPct, quotaSummary) {
         playClickSound(0.38);
-        if (state.sleepPhase !== 'awake') {
-          const refuse = SLEEP_REFUSE_TEXTS[Math.floor(Math.random() * SLEEP_REFUSE_TEXTS.length)];
-          showWhisper(refuse, 'sleep', 3800, true);
-          return;
-        }
-        cancelMove();
         const p = Number.isFinite(Number(usedPct)) && Number(usedPct) >= 0 ? Math.max(0, Math.min(100, Math.round(Number(usedPct)))) : 25;
         const rem = Math.max(0, 100 - p);
         const idx = p >= 100 ? 5 : Math.floor(p / 20);
@@ -2940,6 +2934,12 @@
           ? quotaSummary.trim()
           : `【当前额度】\n已用 ${p}% · 剩余 ${rem}%`;
         const formattedHead = summaryLine.startsWith('【') ? summaryLine : `【${summaryLine}】`;
+        if (state.sleepPhase !== 'awake') {
+          triggerSquash(0.84);
+          showWhisper(`${formattedHead}\n${info.text}`, 'sleep', 6800, true);
+          return;
+        }
+        cancelMove();
         triggerSquash(0.74);
         showWhisper(`${formattedHead}\n${info.text}`, info.meme, 6800, true);
         if (hasAnim(anim)) {

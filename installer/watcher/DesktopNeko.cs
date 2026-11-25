@@ -1195,6 +1195,7 @@ namespace AgyClaudeStyle.Watcher
 
         private readonly System.Windows.Forms.Timer _tickTimer;
         private readonly System.Windows.Forms.Timer _topmostTimer;
+        private readonly System.Windows.Forms.Timer _tapResolveTimer;
         private readonly ContextMenuStrip _menu;
         private readonly List<ToolStripMenuItem> _sizeMenuItems = new List<ToolStripMenuItem>();
         private readonly List<ToolStripMenuItem> _throwPowerMenuItems = new List<ToolStripMenuItem>();
@@ -1251,7 +1252,9 @@ namespace AgyClaudeStyle.Watcher
         private Point _dragStartScreen;
         private float _dragStartFormX, _dragStartFormY;
         private readonly List<Tuple<int, int, double>> _trail = new List<Tuple<int, int, double>>();
-        private readonly List<long> _clicks = new List<long>();
+        private int _tapCount = 0;
+        private double _lastTapUpMs = 0;
+        private Point _lastTapScreen = Point.Empty;
         private double _lastMotionMs;
         private int _lastWinX = int.MinValue;
         private int _lastWinY = int.MinValue;
@@ -1436,7 +1439,10 @@ namespace AgyClaudeStyle.Watcher
             MouseDown += OnPetMouseDown;
             MouseMove += OnPetMouseMove;
             MouseUp += OnPetMouseUp;
-            MouseDoubleClick += (s, e) => { if (e.Button == MouseButtons.Left && HitKindAt(e.Location) == "pet") ReturnToCorner(); };
+
+            _tapResolveTimer = new System.Windows.Forms.Timer();
+            _tapResolveTimer.Interval = 260;
+            _tapResolveTimer.Tick += OnTapResolveTick;
 
             _lastMotionMs = NowMs();
             StartVsyncPacerThread();
@@ -1977,8 +1983,27 @@ namespace AgyClaudeStyle.Watcher
             _prefs.Save(_baseDir);
         }
 
+        private void ShowQuotaBalance()
+        {
+            EvalJs("window.__petApi && window.__petApi.playBalance(" + _lastQuotaUsedPct + ", " + MiniJson.Stringify(_lastQuotaSummary ?? "", false) + ");");
+            AssertTopMostNow();
+        }
+
+        private void OnTapResolveTick(object sender, EventArgs e)
+        {
+            _tapResolveTimer.Stop();
+            int count = _tapCount;
+            _tapCount = 0;
+            if (count == 2)
+            {
+                ShowQuotaBalance();
+            }
+        }
+
         private void ReturnToCorner()
         {
+            _tapResolveTimer.Stop();
+            _tapCount = 0;
             _throwing = false;
             _throwPrevGrounded = false;
             _roamActive = false;
@@ -2092,6 +2117,8 @@ namespace AgyClaudeStyle.Watcher
             if (!_lifted)
             {
                 _lifted = true;
+                _tapResolveTimer.Stop();
+                _tapCount = 0;
                 _dragVx = 0f;
                 _dragVy = 0f;
                 if (!_slingshotMode)
@@ -2136,7 +2163,6 @@ namespace AgyClaudeStyle.Watcher
             _dragVx = 0f;
             _dragVy = 0f;
             Capture = false;
-            long clickNow = Environment.TickCount;
             double now = NowMs();
 
             if (wasSlingshot)
@@ -2170,16 +2196,40 @@ namespace AgyClaudeStyle.Watcher
                 SetMotionActive(false);
                 if (wasAirCatch)
                 {
+                    _tapResolveTimer.Stop();
+                    _tapCount = 0;
                     AssertTopMostNow();
                     return;
                 }
-                while (_clicks.Count > 0 && clickNow - _clicks[0] > 550) _clicks.RemoveAt(0);
-                _clicks.Add(clickNow);
-                bool isTickle = _clicks.Count >= 4;
-                if (isTickle) _clicks.Clear();
-                EvalJs("window.__petApi && window.__petApi.onPoke(" + (isTickle ? "true" : "false") + ");");
-                NativePetWin32.BringAntigravityToFront();
-                AssertTopMostNow();
+                Point curTap = Cursor.Position;
+                bool withinChain = _lastTapUpMs > 0
+                    && (now - _lastTapUpMs) <= 420.0
+                    && Math.Abs(curTap.X - _lastTapScreen.X) <= 28
+                    && Math.Abs(curTap.Y - _lastTapScreen.Y) <= 28;
+                if (!withinChain) _tapCount = 0;
+                _tapCount++;
+                _lastTapUpMs = now;
+                _lastTapScreen = curTap;
+
+                if (_tapCount == 1)
+                {
+                    _tapResolveTimer.Stop();
+                    EvalJs("window.__petApi && window.__petApi.onPoke(false);");
+                    NativePetWin32.BringAntigravityToFront();
+                    AssertTopMostNow();
+                    return;
+                }
+                if (_tapCount == 2)
+                {
+                    _tapResolveTimer.Stop();
+                    _tapResolveTimer.Start();
+                    AssertTopMostNow();
+                    return;
+                }
+                _tapResolveTimer.Stop();
+                _tapCount = 0;
+                _lastTapUpMs = 0;
+                ReturnToCorner();
                 return;
             }
 
@@ -2702,7 +2752,7 @@ namespace AgyClaudeStyle.Watcher
 
             m.Items.Add("🌤️ 查询当前天气 (悬停按 W)", null, (s, e) => EvalJs("window.__petApi && window.__petApi.showWeather(true);"));
             m.Items.Add("📝 头顶待办清单 (悬停按 D)", null, (s, e) => EvalJs("window.__petApi && window.__petApi.toggleTodoPanel();"));
-            m.Items.Add("💰 看看额度用量", null, (s, e) => EvalJs("window.__petApi && window.__petApi.playBalance(" + _lastQuotaUsedPct + ", " + MiniJson.Stringify(_lastQuotaSummary ?? "", false) + ");"));
+            m.Items.Add("💰 看看额度用量 (双击宠物)", null, (s, e) => ShowQuotaBalance());
             m.Items.Add("💬 聊一句 & 发贴图 (悬停按 C)", null, (s, e) => EvalJs("window.__petApi && window.__petApi.triggerChatter();"));
             m.Items.Add(new ToolStripSeparator());
 
@@ -2897,7 +2947,7 @@ namespace AgyClaudeStyle.Watcher
                 }
                 catch { }
             });
-            m.Items.Add("🏠 回到屏幕右下角", null, (s, e) => ReturnToCorner());
+            m.Items.Add("🏠 回到屏幕右下角 (三击宠物)", null, (s, e) => ReturnToCorner());
             m.Items.Add("🚀 切回 Antigravity", null, (s, e) => NativePetWin32.BringAntigravityToFront());
             m.Items.Add("🔄 重启宠物 (热更新生效)", null, (s, e) => RestartPetProcess());
             m.Items.Add("🙈 暂时隐藏桌面宠物", null, (s, e) =>
@@ -3159,6 +3209,7 @@ namespace AgyClaudeStyle.Watcher
                 try { _vsyncWake.Dispose(); } catch { }
                 try { _tickTimer.Stop(); _tickTimer.Dispose(); } catch { }
                 try { _topmostTimer.Stop(); _topmostTimer.Dispose(); } catch { }
+                try { _tapResolveTimer.Stop(); _tapResolveTimer.Dispose(); } catch { }
                 try { _menu.Dispose(); } catch { }
                 try { if (_ctrl2 != null) _ctrl2.Close(); } catch { }
             }

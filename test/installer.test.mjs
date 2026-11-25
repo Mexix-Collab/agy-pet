@@ -816,3 +816,17 @@ test(
     } catch {}
   }
 });
+
+test('desktop pet uses double-click for quota display and triple-click to return to corner', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const src = fs.readFileSync(path.join(repoRoot, 'installer', 'watcher', 'DesktopNeko.cs'), 'utf8');
+  assert.doesNotMatch(
+    src,
+    /MouseDoubleClick\s*\+=.*ReturnToCorner/,
+    'MouseDoubleClick should no longer directly trigger ReturnToCorner'
+  );
+  assert.match(src, /private\s+void\s+ShowQuotaBalance\s*\(/, 'ShowQuotaBalance helper exists');
+  assert.match(src, /if\s*\(\s*count\s*==\s*2\s*\)\s*\{\s*ShowQuotaBalance\s*\(\s*\)\s*;/, 'double tap resolves to ShowQuotaBalance');
+  assert.match(src, /if\s*\(\s*_tapCount\s*==\s*2\s*\)/, 'double tap arms debounce timer');
+  assert.match(src, /_tapCount\s*=\s*0;\s*_lastTapUpMs\s*=\s*0;\s*ReturnToCorner\s*\(\s*\);/, 'triple tap immediately returns to bottom-right corner');
+});
