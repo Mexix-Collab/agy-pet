@@ -4,10 +4,13 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace AgyClaudeStyle.Watcher
@@ -75,6 +78,8 @@ namespace AgyClaudeStyle.Watcher
         public float Friction = 2.5f;
         public bool DragSpring = true;
         public bool CeilingBounce = true;
+        public bool AutoCheckUpdates = true;
+        public string LastUpdateCheckDate = "";
         public int? SavedX = null;
         public int? SavedY = null;
 
@@ -157,6 +162,11 @@ namespace AgyClaudeStyle.Watcher
                 }
                 if (raw.ContainsKey("dragSpring")) prefs.DragSpring = !Equals(raw["dragSpring"], false);
                 if (raw.ContainsKey("ceilingBounce")) prefs.CeilingBounce = !Equals(raw["ceilingBounce"], false);
+                if (raw.ContainsKey("autoCheckUpdates")) prefs.AutoCheckUpdates = !Equals(raw["autoCheckUpdates"], false);
+                if (raw.ContainsKey("lastUpdateCheckDate") && raw["lastUpdateCheckDate"] != null)
+                {
+                    prefs.LastUpdateCheckDate = Convert.ToString(raw["lastUpdateCheckDate"]).Trim();
+                }
                 if (raw.ContainsKey("savedX") && raw["savedX"] != null) prefs.SavedX = Convert.ToInt32(raw["savedX"]);
                 if (raw.ContainsKey("savedY") && raw["savedY"] != null) prefs.SavedY = Convert.ToInt32(raw["savedY"]);
             }
@@ -191,6 +201,8 @@ namespace AgyClaudeStyle.Watcher
                 obj["friction"] = Math.Round(Friction, 2);
                 obj["dragSpring"] = DragSpring;
                 obj["ceilingBounce"] = CeilingBounce;
+                obj["autoCheckUpdates"] = AutoCheckUpdates;
+                obj["lastUpdateCheckDate"] = LastUpdateCheckDate ?? "";
                 if (SavedX.HasValue) obj["savedX"] = SavedX.Value;
                 if (SavedY.HasValue) obj["savedY"] = SavedY.Value;
                 File.WriteAllText(path, MiniJson.Stringify(obj, true) + "\n", new UTF8Encoding(false));
@@ -1220,6 +1232,15 @@ namespace AgyClaudeStyle.Watcher
         private ToolStripMenuItem _topMostMenuItem;
         private ToolStripMenuItem _agyFastMenuItem;
         private ToolStripMenuItem _sleepMenuItem;
+        private ToolStripMenuItem _updateMenuItem;
+        private bool _updateChecking = false;
+        private bool _updateDownloading = false;
+        private string _latestUpdateVersion = "";
+        private string _latestUpdateAssetName = "";
+        private string _latestUpdateUrl = "";
+        private long _latestUpdateSize = 0;
+        private string _latestSha256Url = "";
+        private string _latestReleasePageUrl = "https://github.com/Mexix-Collab/agy-pet/releases/latest";
         private bool _isSleeping = false;
         private int _lastQuotaUsedPct = 20;
         private string _lastQuotaSummary = "";
@@ -1560,6 +1581,7 @@ namespace AgyClaudeStyle.Watcher
                 IsHandleCreated ? Handle.ToInt64() : 0L, Left, Top, Width, Height, CurrentDpiScale(), _prefs.TopMost, scrName));
             InitWebView2DirectComposition();
             AssertTopMostNow();
+            ScheduleDailyUpdateCheck();
         }
 
         private void InitWebView2DirectComposition()
@@ -2949,6 +2971,9 @@ namespace AgyClaudeStyle.Watcher
             });
             m.Items.Add("🏠 回到屏幕右下角 (三击宠物)", null, (s, e) => ReturnToCorner());
             m.Items.Add("🚀 切回 Antigravity", null, (s, e) => NativePetWin32.BringAntigravityToFront());
+            _updateMenuItem = new ToolStripMenuItem("🆕 检查在线更新 (轻量热更)");
+            _updateMenuItem.Click += (s, e) => OnUpdateMenuClicked();
+            m.Items.Add(_updateMenuItem);
             m.Items.Add("🔄 重启宠物 (热更新生效)", null, (s, e) => RestartPetProcess());
             m.Items.Add("🙈 暂时隐藏桌面宠物", null, (s, e) =>
             {
@@ -2958,6 +2983,300 @@ namespace AgyClaudeStyle.Watcher
             });
             AttachTopMostToSubMenus(m.Items);
             return m;
+        }
+
+        private string ReadInstalledVersion()
+        {
+            try
+            {
+                string mf = Path.Combine(_baseDir, "manifest.json");
+                if (File.Exists(mf))
+                {
+                    Dictionary<string, object> obj = MiniJson.ParseObject(File.ReadAllText(mf, Encoding.UTF8));
+                    if (obj != null && obj.ContainsKey("version") && obj["version"] != null)
+                    {
+                        string v = Convert.ToString(obj["version"]).Trim().TrimStart('v', 'V');
+                        if (!string.IsNullOrEmpty(v)) return v;
+                    }
+                }
+            }
+            catch { }
+            return "2.0.0";
+        }
+
+        private static int CompareSemVer(string a, string b)
+        {
+            string sa = (a ?? "").Trim().TrimStart('v', 'V');
+            string sb = (b ?? "").Trim().TrimStart('v', 'V');
+            int dashA = sa.IndexOf('-');
+            if (dashA >= 0) sa = sa.Substring(0, dashA);
+            int dashB = sb.IndexOf('-');
+            if (dashB >= 0) sb = sb.Substring(0, dashB);
+            string[] pa = sa.Split('.');
+            string[] pb = sb.Split('.');
+            int n = Math.Max(pa.Length, pb.Length);
+            for (int i = 0; i < n; i++)
+            {
+                int va = 0;
+                int vb = 0;
+                if (i < pa.Length) int.TryParse(pa[i], out va);
+                if (i < pb.Length) int.TryParse(pb[i], out vb);
+                if (va != vb) return va.CompareTo(vb);
+            }
+            return 0;
+        }
+
+        private void ScheduleDailyUpdateCheck()
+        {
+            if (!_prefs.AutoCheckUpdates) return;
+            string today = DateTime.Now.ToString("yyyy-MM-dd");
+            if (string.Equals(_prefs.LastUpdateCheckDate, today, StringComparison.Ordinal)) return;
+            string lowerBase = (_baseDir ?? "").ToLowerInvariant();
+            if (lowerBase.IndexOf("\\temp\\", StringComparison.Ordinal) >= 0) return;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(25000).ConfigureAwait(false);
+                    if (IsDisposed) return;
+                    _prefs.LastUpdateCheckDate = today;
+                    _prefs.Save(_baseDir);
+                    await CheckForUpdateAsync(false).ConfigureAwait(false);
+                }
+                catch { }
+            });
+        }
+
+        private void OnUpdateMenuClicked()
+        {
+            if (_updateChecking || _updateDownloading) return;
+            string curVer = ReadInstalledVersion();
+            if (!string.IsNullOrEmpty(_latestUpdateVersion) && !string.IsNullOrEmpty(_latestUpdateUrl) && CompareSemVer(_latestUpdateVersion, curVer) > 0)
+            {
+                DownloadAndApplyUpdate();
+                return;
+            }
+            Task.Run(() => CheckForUpdateAsync(true));
+        }
+
+        private void ShowPetNoticeSafe(string text, string meme)
+        {
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke((Action)(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        EvalJs("window.__petApi && window.__petApi.showNotice(" + MiniJson.Stringify(text ?? "", false) + ", " + MiniJson.Stringify(meme ?? "ciallo", false) + ");");
+                    }
+                }));
+            }
+            catch { }
+        }
+
+        private async Task CheckForUpdateAsync(bool manual)
+        {
+            if (_updateChecking || _updateDownloading) return;
+            _updateChecking = true;
+            if (manual) ShowPetNoticeSafe("正在检查 AGY Pet 最新版本…", "cute");
+            try
+            {
+                try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
+                string curVer = ReadInstalledVersion();
+                using (HttpClient http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(12);
+                    http.DefaultRequestHeaders.Add("User-Agent", "AGY-Pet/" + curVer);
+                    http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
+                    string json = await http.GetStringAsync("https://api.github.com/repos/Mexix-Collab/agy-pet/releases/latest").ConfigureAwait(false);
+                    Dictionary<string, object> rel = MiniJson.ParseObject(json);
+                    if (rel == null) throw new Exception("无效响应");
+
+                    string tag = rel.ContainsKey("tag_name") ? Convert.ToString(rel["tag_name"]) : "";
+                    string latestVer = (tag ?? "").Trim().TrimStart('v', 'V');
+                    string htmlUrl = rel.ContainsKey("html_url") ? Convert.ToString(rel["html_url"]) : _latestReleasePageUrl;
+
+                    string coreName = "";
+                    string coreUrl = "";
+                    long coreSize = 0;
+                    string fullName = "";
+                    string fullUrl = "";
+                    long fullSize = 0;
+                    string shaUrl = "";
+
+                    List<object> assets = rel.ContainsKey("assets") ? (rel["assets"] as List<object>) : null;
+                    if (assets != null)
+                    {
+                        for (int i = 0; i < assets.Count; i++)
+                        {
+                            Dictionary<string, object> a = assets[i] as Dictionary<string, object>;
+                            if (a == null) continue;
+                            string aname = a.ContainsKey("name") ? Convert.ToString(a["name"]) : "";
+                            string aurl = a.ContainsKey("browser_download_url") ? Convert.ToString(a["browser_download_url"]) : "";
+                            long asize = 0;
+                            if (a.ContainsKey("size") && a["size"] != null) long.TryParse(Convert.ToString(a["size"]), out asize);
+                            if (string.IsNullOrEmpty(aname) || string.IsNullOrEmpty(aurl)) continue;
+
+                            if (aname.IndexOf("-Core-Windows-x64.exe", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                coreName = aname;
+                                coreUrl = aurl;
+                                coreSize = asize;
+                            }
+                            else if (aname.IndexOf("-Windows-x64.exe", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                fullName = aname;
+                                fullUrl = aurl;
+                                fullSize = asize;
+                            }
+                            else if (string.Equals(aname, "SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase))
+                            {
+                                shaUrl = aurl;
+                            }
+                        }
+                    }
+
+                    string pickName = !string.IsNullOrEmpty(coreUrl) ? coreName : fullName;
+                    string pickUrl = !string.IsNullOrEmpty(coreUrl) ? coreUrl : fullUrl;
+                    long pickSize = !string.IsNullOrEmpty(coreUrl) ? coreSize : fullSize;
+
+                    if (!string.IsNullOrEmpty(latestVer) && CompareSemVer(latestVer, curVer) > 0 && !string.IsNullOrEmpty(pickUrl))
+                    {
+                        _latestUpdateVersion = latestVer;
+                        _latestUpdateAssetName = pickName;
+                        _latestUpdateUrl = pickUrl;
+                        _latestUpdateSize = pickSize;
+                        _latestSha256Url = shaUrl;
+                        if (!string.IsNullOrEmpty(htmlUrl)) _latestReleasePageUrl = htmlUrl;
+
+                        string szStr = pickSize > 0 ? string.Format("{0:0.0} MB", pickSize / (1024.0 * 1024.0)) : "轻量包";
+                        ShowPetNoticeSafe(
+                            string.Format("发现新版本 v{0} ({1}) ✦\n右键点击「立即更新」3 秒无损升级，保留全部动画！", latestVer, szStr),
+                            "ciallo");
+                        if (manual)
+                        {
+                            BeginInvoke((Action)(() => DownloadAndApplyUpdate()));
+                        }
+                    }
+                    else if (manual)
+                    {
+                        ShowPetNoticeSafe(string.Format("当前已是最新版 v{0} ✦ 无需更新~", curVer), "ciallo");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                WritePetLog("CheckForUpdateAsync failed: " + ex.Message);
+                if (manual)
+                {
+                    ShowPetNoticeSafe("检查更新失败，请确认网络可访问 GitHub Releases", "oops");
+                }
+            }
+            finally
+            {
+                _updateChecking = false;
+            }
+        }
+
+        private void DownloadAndApplyUpdate()
+        {
+            if (_updateDownloading || string.IsNullOrEmpty(_latestUpdateUrl)) return;
+            string ver = _latestUpdateVersion;
+            string assetName = _latestUpdateAssetName;
+            string dlUrl = _latestUpdateUrl;
+            string shaUrl = _latestSha256Url;
+            string szStr = _latestUpdateSize > 0
+                ? string.Format("{0:0.0} MB", _latestUpdateSize / (1024.0 * 1024.0))
+                : "轻量包";
+
+            DialogResult dr = MessageBox.Show(
+                string.Format(
+                    "检测到 AGY Pet 新版本 v{0}（约 {1}）。\n\n点击「是」将自动下载轻量核心升级包并校验 SHA256，原地完成升级后自动重启宠物。\n\n✓ 100% 保留全部 114 段动画、自定义 .webm、称呼设置与待办记录。",
+                    ver, szStr),
+                "AGY Pet 在线轻量更新",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (dr != DialogResult.Yes) return;
+
+            _updateDownloading = true;
+            ShowPetNoticeSafe(string.Format("正在下载轻量更新包 v{0} ({1})…", ver, szStr), "cute");
+
+            Task.Run(async () =>
+            {
+                string tempExe = Path.Combine(Path.GetTempPath(), "agy-pet-update-" + ver + ".exe");
+                try
+                {
+                    try { ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12; } catch { }
+                    string curVer = ReadInstalledVersion();
+                    using (HttpClient http = new HttpClient())
+                    {
+                        http.Timeout = TimeSpan.FromMinutes(3);
+                        http.DefaultRequestHeaders.Add("User-Agent", "AGY-Pet/" + curVer);
+
+                        byte[] bin = await http.GetByteArrayAsync(dlUrl).ConfigureAwait(false);
+                        File.WriteAllBytes(tempExe, bin);
+
+                        if (!string.IsNullOrEmpty(shaUrl) && !string.IsNullOrEmpty(assetName))
+                        {
+                            ShowPetNoticeSafe("下载完成，正在校验 SHA256 完整性…", "cute");
+                            string shaText = await http.GetStringAsync(shaUrl).ConfigureAwait(false);
+                            string expectedHash = "";
+                            string[] lines = shaText.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                            for (int i = 0; i < lines.Length; i++)
+                            {
+                                string ln = lines[i].Trim();
+                                if (ln.EndsWith(assetName, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    int sp = ln.IndexOf(' ');
+                                    if (sp > 0) expectedHash = ln.Substring(0, sp).Trim().ToLowerInvariant();
+                                    break;
+                                }
+                            }
+                            if (!string.IsNullOrEmpty(expectedHash))
+                            {
+                                string actualHash;
+                                using (SHA256 sha = SHA256.Create())
+                                {
+                                    byte[] digest = sha.ComputeHash(bin);
+                                    StringBuilder sb = new StringBuilder(64);
+                                    for (int bi = 0; bi < digest.Length; bi++) sb.Append(digest[bi].ToString("x2"));
+                                    actualHash = sb.ToString();
+                                }
+                                if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    try { File.Delete(tempExe); } catch { }
+                                    throw new Exception("SHA256 校验失败，已自动中止安装");
+                                }
+                            }
+                        }
+                    }
+
+                    ShowPetNoticeSafe("校验通过！正在原地静默升级并重启宠物…", "ciallo");
+                    SaveCurrentPos();
+                    bool keepAgyFast = AgyFastHelper.IsInstalled() && AgyFastHelper.IsEnabled();
+                    ProcessStartInfo psi = new ProcessStartInfo();
+                    psi.FileName = tempExe;
+                    psi.Arguments = "--silent --no-kill-legacy "
+                        + (keepAgyFast ? "--agy-fast " : "--no-agy-fast ")
+                        + "--install-dir \"" + _baseDir.TrimEnd('\\') + "\"";
+                    psi.WorkingDirectory = Path.GetTempPath();
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    Process.Start(psi);
+                    WritePetLog("Online core updater launched: " + tempExe + " " + psi.Arguments);
+                }
+                catch (Exception ex)
+                {
+                    WritePetLog("DownloadAndApplyUpdate failed: " + ex.Message);
+                    ShowPetNoticeSafe("更新失败：" + ex.Message, "oops");
+                }
+                finally
+                {
+                    _updateDownloading = false;
+                }
+            });
         }
 
         private void RestartPetProcess()
@@ -3105,6 +3424,29 @@ namespace AgyClaudeStyle.Watcher
                 _agyFastMenuItem.Text = afEnabled
                     ? "⚡ agy-fast 加速插件（已开启 · 减轮次省额度）"
                     : (afInstalled ? "⚡ agy-fast 加速插件（已关闭 · 点击开启）" : "⚡ agy-fast 加速插件（未安装 · 点击一键部署）");
+            }
+            if (_updateMenuItem != null)
+            {
+                string curVer = ReadInstalledVersion();
+                if (_updateDownloading)
+                {
+                    _updateMenuItem.Text = "⏳ 正在下载并应用更新...";
+                }
+                else if (_updateChecking)
+                {
+                    _updateMenuItem.Text = "🔍 正在检查在线更新...";
+                }
+                else if (!string.IsNullOrEmpty(_latestUpdateVersion) && CompareSemVer(_latestUpdateVersion, curVer) > 0)
+                {
+                    string szHint = _latestUpdateSize > 0
+                        ? string.Format("{0:0.0} MB", _latestUpdateSize / (1024.0 * 1024.0))
+                        : "轻量包";
+                    _updateMenuItem.Text = string.Format("⬆️ 立即更新到 v{0} ({1} · 保留动画)", _latestUpdateVersion, szHint);
+                }
+                else
+                {
+                    _updateMenuItem.Text = string.Format("🆕 检查在线更新 (当前 v{0})", curVer);
+                }
             }
             for (int i = 0; i < _fontMenuItems.Count; i++)
             {

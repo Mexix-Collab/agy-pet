@@ -93,9 +93,10 @@ Powered by Antigravity's built-in **Chrome DevTools Protocol (CDP)** for non-des
 > [!TIP]
 > **Ready-to-Run Installer**: This Git repository stays ultra-light (~8.6 MB, source code only; the 114 large `.webm` animations are excluded from Git). Download the self-contained Windows installer `AGY-Pet-v<version>-Windows-x64.exe` from **[Releases](https://github.com/Mexix-Collab/agy-pet/releases)** — includes all 114 animations and requires **no Node.js** on the target machine.
 
-### 🪟 Windows Standalone Installer
-1. Download `AGY-Pet-v2.0.0-Windows-x64.exe` from **[Releases](https://github.com/Mexix-Collab/agy-pet/releases)**.
-2. Run the high-DPI installer, choose **Managed Mode (Recommended, 0 idle background processes)** or **Daemon Mode**, optionally enable `agy-fast`, and click **Install**.
+### 🪟 Windows Standalone Installer & 3 MB Core Auto-Updater
+1. **First-time install**: Download `AGY-Pet-v2.0.0-Windows-x64.exe` from **[Releases](https://github.com/Mexix-Collab/agy-pet/releases)** (all 114 animations bundled).
+2. **Future updates (no re-downloading 235 MB)**: Right-click the Desktop Pet → **Check for Updates** to auto-download the ~3 MB `AGY-Pet-v<version>-Core-Windows-x64.exe` with SHA256 verification and upgrade in-place while preserving all animations, titles, and settings.
+3. Run the high-DPI installer, choose **Managed Mode (Recommended, 0 idle background processes)** or **Daemon Mode**, optionally enable `agy-fast`, and click **Install**.
    - Installs to `%LOCALAPPDATA%\agy-pet` and automatically migrates legacy `agy-claude-style` settings if present.
    - Re-run anytime to switch modes, upgrade, or cleanly uninstall.
 

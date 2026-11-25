@@ -140,7 +140,9 @@
 
 ### 🪟 方式一：Windows 独立安装器（目标机器无需 Node.js）
 
-1. 前往 **[Releases](https://github.com/Mexix-Collab/agy-pet/releases)** 下载 `AGY-Pet-v2.0.0-Windows-x64.exe`。
+1. 前往 **[Releases](https://github.com/Mexix-Collab/agy-pet/releases)** 下载：
+   - **首次安装（新用户）**：下载全量包 `AGY-Pet-v2.0.0-Windows-x64.exe`（内置 114 段动画，一步到位）；
+   - **后续版本升级（老用户）**：**无需重下 235 MB！** 直接在桌面宠物右键点击 **「🆕 检查在线更新」**，自动下载仅 **~3 MB** 的 `AGY-Pet-v<version>-Core-Windows-x64.exe` 轻量核心包并校验 `SHA256`，3 秒原地升级并 **100% 保留全部动画、称呼与设置**。
 2. 双击运行，在全新高 DPI 安装器界面选择运行模式（默认「免后台常驻」）及是否同时启用 `agy-fast` 加速插件，点击 **「开始安装」**：
    - 资源部署至 `%LOCALAPPDATA%\agy-pet`（如本机曾安装过旧版 `agy-claude-style`，会自动停旧、平滑迁移 `config.json` / `desktop-pet.json` / `pet-todos.json` 并清理旧快捷方式）。
    - 安装器支持随时重新运行以无损切换模式、升级或一键「卸载并恢复」原生界面。

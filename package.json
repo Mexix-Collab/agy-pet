@@ -12,6 +12,7 @@
     "watch": "node inject.js --watch",
     "remove": "node remove.js",
     "build:installer": "node scripts/build-installer.mjs",
+    "build:core": "node scripts/build-installer.mjs --core-only",
     "build:macos": "node scripts/build-macos.mjs"
   }
 }

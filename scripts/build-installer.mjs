@@ -32,9 +32,10 @@ function findCsc() {
   throw new Error('csc.exe (.NET Framework 4.x) not found');
 }
 
-function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION } = {}) {
+function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION, coreOnly = false } = {}) {
   const cleanVersion = normalizeVersion(version);
-  const resolvedOut = outputPath || path.join(ROOT_DIR, getArtifactNames(cleanVersion).windowsInstaller);
+  const names = getArtifactNames(cleanVersion);
+  const resolvedOut = outputPath || path.join(ROOT_DIR, coreOnly ? names.windowsCoreUpdater : names.windowsInstaller);
   const csc = findCsc();
   const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-build-'));
 
@@ -107,7 +108,7 @@ function buildInstaller({ outputPath, configPath, version = cdp.PLUGIN_VERSION }
     }
 
     const webmOptDir = path.join(ROOT_DIR, 'neko-studio', 'webm-opt');
-    if (fs.existsSync(webmOptDir)) {
+    if (!coreOnly && fs.existsSync(webmOptDir)) {
       for (const fname of fs.readdirSync(webmOptDir)) {
         if (/\.webm$/i.test(fname)) {
           payloadFiles.push({
@@ -187,17 +188,20 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   const args = process.argv.slice(2);
   let outputPath;
   let version = cdp.PLUGIN_VERSION;
+  let coreOnly = false;
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--out' || args[i] === '-o') && i + 1 < args.length) {
       outputPath = path.resolve(args[++i]);
     } else if (args[i] === '--version' && i + 1 < args.length) {
       version = args[++i];
+    } else if (args[i] === '--core-only' || args[i] === '--core') {
+      coreOnly = true;
     }
   }
-  const res = buildInstaller({ outputPath, version });
+  const res = buildInstaller({ outputPath, version, coreOnly });
   console.log(
     `[✓] Built ${res.outputPath} (${(res.sizeBytes / 1024).toFixed(1)} KB; ` +
-    `payload ${(res.payloadZipBytes / 1024).toFixed(1)} KB, ${res.fileCount} files)`
+    `payload ${(res.payloadZipBytes / 1024).toFixed(1)} KB, ${res.fileCount} files${coreOnly ? ', core-only' : ''})`
   );
 }
 

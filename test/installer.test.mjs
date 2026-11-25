@@ -308,6 +308,7 @@ test('unified artifact naming and version parity stay consistent across package,
   assert.deepEqual(getArtifactNames('v2.0.0'), {
     version: '2.0.0',
     windowsInstaller: 'AGY-Pet-v2.0.0-Windows-x64.exe',
+    windowsCoreUpdater: 'AGY-Pet-v2.0.0-Core-Windows-x64.exe',
     macosDmg: 'AGY-Pet-v2.0.0-macOS-universal.dmg',
     macosApp: 'AGY Pet.app',
   });
@@ -839,4 +840,19 @@ test('watcher guards AuthBootstrap #t= and auto-recovers Antigravity blank-spinn
   assert.match(src, /Page\.reload/, 'attempts gentle reload first');
   assert.match(src, /Page\.close/, 'closes dead blank window as fallback');
   assert.match(src, /WakeExistingAntigravityWindow/, 're-wakes single-instance Antigravity cleanly');
+});
+
+test('core-only lightweight updater build and online updater contract', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const commonSrc = fs.readFileSync(path.join(repoRoot, 'scripts', 'build-common.mjs'), 'utf8');
+  const buildSrc = fs.readFileSync(path.join(repoRoot, 'scripts', 'build-installer.mjs'), 'utf8');
+  const nekoSrc = fs.readFileSync(path.join(repoRoot, 'installer', 'watcher', 'DesktopNeko.cs'), 'utf8');
+  assert.match(commonSrc, /windowsCoreUpdater:\s*`AGY-Pet-v\$\{cleanVersion\}-Core-Windows-x64\.exe`/);
+  assert.match(buildSrc, /coreOnly\s*=\s*false/);
+  assert.match(buildSrc, /--core-only/);
+  assert.match(nekoSrc, /CheckForUpdateAsync/);
+  assert.match(nekoSrc, /DownloadAndApplyUpdate/);
+  assert.match(nekoSrc, /-Core-Windows-x64\.exe/);
+  assert.match(nekoSrc, /SHA256SUMS\.txt/);
+  assert.match(nekoSrc, /CompareSemVer/);
 });

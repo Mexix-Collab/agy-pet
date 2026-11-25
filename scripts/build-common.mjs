@@ -25,6 +25,7 @@ function getArtifactNames(version = cdp.PLUGIN_VERSION) {
   return {
     version: cleanVersion,
     windowsInstaller: `AGY-Pet-v${cleanVersion}-Windows-x64.exe`,
+    windowsCoreUpdater: `AGY-Pet-v${cleanVersion}-Core-Windows-x64.exe`,
     macosDmg: `AGY-Pet-v${cleanVersion}-macOS-universal.dmg`,
     macosApp: 'AGY Pet.app',
   };
